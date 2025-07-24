@@ -18,13 +18,10 @@ permissions:
   id-token: write
 
 jobs:
-  # AI-powered merge decision that waits for all CI jobs using native needs
+  # AI-powered merge decision that waits for all CI checks to complete
   ai-merge-decision:
     runs-on: ubuntu-latest
-    # Wait for all CI jobs to complete using native GitHub Actions dependencies
-    needs: [test, security, compatibility, validate-pr, compatibility-check, claude-review]
-    # Always run even if some CI jobs fail (we'll analyze the failures)
-    if: always()
+    # Run automatically when PR is updated - no needs dependency since jobs are in different workflows
     
     permissions:
       contents: read
@@ -34,6 +31,70 @@ jobs:
       id-token: write
       
     steps:
+      - name: Wait for required CI workflows to complete
+        run: |
+          echo "🔄 Waiting for CI workflows to complete..."
+          
+          # Function to check if a workflow run has completed
+          check_workflow_status() {
+            local workflow_name="$1"
+            echo "Checking status of $workflow_name..."
+            
+            # Get the latest run for this workflow on this PR
+            gh run list --repo ${{ github.repository }} \
+              --workflow "$workflow_name" \
+              --json status,conclusion,headSha \
+              --jq ".[] | select(.headSha == \"${{ github.event.pull_request.head.sha }}\") | {status: .status, conclusion: .conclusion}" \
+              | head -1
+          }
+          
+          # Wait for workflows with timeout
+          timeout=600  # 10 minutes
+          interval=15  # Check every 15 seconds
+          elapsed=0
+          
+          required_workflows=("CI" "PR Checks" "Claude Code Review")
+          
+          while [ $elapsed -lt $timeout ]; do
+            all_complete=true
+            
+            for workflow in "${required_workflows[@]}"; do
+              status_info=$(check_workflow_status "$workflow")
+              
+              if [ -z "$status_info" ]; then
+                echo "⏳ Workflow '$workflow' not found or not started yet"
+                all_complete=false
+                continue
+              fi
+              
+              status=$(echo "$status_info" | jq -r '.status // empty')
+              conclusion=$(echo "$status_info" | jq -r '.conclusion // empty')
+              
+              if [ "$status" != "completed" ]; then
+                echo "⏳ Workflow '$workflow' still running (status: $status)"
+                all_complete=false
+              else
+                echo "✅ Workflow '$workflow' completed (conclusion: $conclusion)"
+              fi
+            done
+            
+            if [ "$all_complete" = true ]; then
+              echo "🎉 All required workflows have completed!"
+              break
+            fi
+            
+            echo "⏳ Waiting ${interval}s before next check... (${elapsed}s/${timeout}s elapsed)"
+            sleep $interval
+            elapsed=$((elapsed + interval))
+          done
+          
+          if [ $elapsed -ge $timeout ]; then
+            echo "⚠️ Timeout waiting for workflows to complete"
+            echo "Proceeding with available information..."
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -86,42 +147,80 @@ jobs:
           git diff --stat ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} >> .github/context/file-changes.txt || echo "Could not get diff stats" >> .github/context/file-changes.txt
           echo "" >> .github/context/file-changes.txt
 
-      - name: Collect CI job results using GitHub needs context
+      - name: Collect CI workflow results from GitHub API
         run: |
-          echo "=== CI JOB RESULTS ===" > .github/context/ci-results.txt
-          echo "Collected from GitHub Actions job results:" >> .github/context/ci-results.txt
+          echo "=== CI WORKFLOW RESULTS ===" > .github/context/ci-results.txt
+          echo "Collected from GitHub API for commit ${{ github.event.pull_request.head.sha }}" >> .github/context/ci-results.txt
           echo "" >> .github/context/ci-results.txt
           
-          # Analyze results from needs context
-          echo "test job result: ${{ needs.test.result }}" >> .github/context/ci-results.txt
-          echo "security job result: ${{ needs.security.result }}" >> .github/context/ci-results.txt  
-          echo "compatibility job result: ${{ needs.compatibility.result }}" >> .github/context/ci-results.txt
-          echo "validate-pr job result: ${{ needs.validate-pr.result }}" >> .github/context/ci-results.txt
-          echo "compatibility-check job result: ${{ needs.compatibility-check.result }}" >> .github/context/ci-results.txt
-          echo "claude-review job result: ${{ needs.claude-review.result }}" >> .github/context/ci-results.txt
-          echo "" >> .github/context/ci-results.txt
+          # Get workflow run results
+          workflows=("CI" "PR Checks" "Claude Code Review")
+          overall_status="PASS"
+          failed_workflows=()
           
-          # Determine overall CI status
-          if [[ "${{ needs.test.result }}" == "success" && 
-                "${{ needs.security.result }}" == "success" && 
-                "${{ needs.compatibility.result }}" == "success" && 
-                "${{ needs.validate-pr.result }}" == "success" && 
-                "${{ needs.compatibility-check.result }}" == "success" ]]; then
-            echo "Overall CI Status: PASS" >> .github/context/ci-results.txt
-          else
-            echo "Overall CI Status: FAIL" >> .github/context/ci-results.txt
-            echo "Failed jobs:" >> .github/context/ci-results.txt
-            [[ "${{ needs.test.result }}" != "success" ]] && echo "  - test: ${{ needs.test.result }}" >> .github/context/ci-results.txt
-            [[ "${{ needs.security.result }}" != "success" ]] && echo "  - security: ${{ needs.security.result }}" >> .github/context/ci-results.txt
-            [[ "${{ needs.compatibility.result }}" != "success" ]] && echo "  - compatibility: ${{ needs.compatibility.result }}" >> .github/context/ci-results.txt
-            [[ "${{ needs.validate-pr.result }}" != "success" ]] && echo "  - validate-pr: ${{ needs.validate-pr.result }}" >> .github/context/ci-results.txt
-            [[ "${{ needs.compatibility-check.result }}" != "success" ]] && echo "  - compatibility-check: ${{ needs.compatibility-check.result }}" >> .github/context/ci-results.txt
+          for workflow in "${workflows[@]}"; do
+            echo "Checking workflow: $workflow" >> .github/context/ci-results.txt
+            
+            # Get the latest run for this workflow
+            run_info=$(gh run list --repo ${{ github.repository }} \
+              --workflow "$workflow" \
+              --json status,conclusion,headSha \
+              --jq ".[] | select(.headSha == \"${{ github.event.pull_request.head.sha }}\") | {status: .status, conclusion: .conclusion}" \
+              | head -1)
+            
+            if [ -z "$run_info" ]; then
+              echo "  Status: NOT_FOUND" >> .github/context/ci-results.txt
+              overall_status="FAIL"
+              failed_workflows+=("$workflow (not found)")
+            else
+              status=$(echo "$run_info" | jq -r '.status // "unknown"')
+              conclusion=$(echo "$run_info" | jq -r '.conclusion // "unknown"')
+              
+              echo "  Status: $status" >> .github/context/ci-results.txt
+              echo "  Conclusion: $conclusion" >> .github/context/ci-results.txt
+              
+              if [ "$conclusion" != "success" ]; then
+                overall_status="FAIL"
+                failed_workflows+=("$workflow ($conclusion)")
+              fi
+            fi
+            echo "" >> .github/context/ci-results.txt
+          done
+          
+          echo "=== OVERALL ASSESSMENT ===" >> .github/context/ci-results.txt
+          echo "Overall CI Status: $overall_status" >> .github/context/ci-results.txt
+          
+          if [ "$overall_status" = "FAIL" ]; then
+            echo "Failed workflows:" >> .github/context/ci-results.txt
+            for failed in "${failed_workflows[@]}"; do
+              echo "  - $failed" >> .github/context/ci-results.txt
+            done
           fi
+          
+          # Export for use in AI prompt
+          echo "CI_OVERALL_STATUS=$overall_status" >> $GITHUB_ENV
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Collect Claude Code review findings
         run: |
           echo "=== CLAUDE CODE REVIEW ANALYSIS ===" > .github/context/claude-review-analysis.txt
-          echo "Claude Review Job Result: ${{ needs.claude-review.result }}" >> .github/context/claude-review-analysis.txt
+          
+          # Get Claude Code Review workflow result
+          claude_run_info=$(gh run list --repo ${{ github.repository }} \
+            --workflow "Claude Code Review" \
+            --json status,conclusion,headSha \
+            --jq ".[] | select(.headSha == \"${{ github.event.pull_request.head.sha }}\") | {status: .status, conclusion: .conclusion}" \
+            | head -1)
+          
+          if [ -n "$claude_run_info" ]; then
+            status=$(echo "$claude_run_info" | jq -r '.status // "unknown"')
+            conclusion=$(echo "$claude_run_info" | jq -r '.conclusion // "unknown"')
+            echo "Claude Review Workflow Status: $status" >> .github/context/claude-review-analysis.txt
+            echo "Claude Review Workflow Conclusion: $conclusion" >> .github/context/claude-review-analysis.txt
+          else
+            echo "Claude Review Workflow: NOT_FOUND" >> .github/context/claude-review-analysis.txt
+          fi
           echo "" >> .github/context/claude-review-analysis.txt
           
           # Get Claude Code review comments
@@ -188,13 +287,9 @@ jobs:
             
             ## Current Context
             
-            **CI Job Results (from GitHub Actions):**
-            - test: ${{ needs.test.result }}
-            - security: ${{ needs.security.result }}
-            - compatibility: ${{ needs.compatibility.result }}
-            - validate-pr: ${{ needs.validate-pr.result }}
-            - compatibility-check: ${{ needs.compatibility-check.result }}
-            - claude-review: ${{ needs.claude-review.result }}
+            **CI Workflow Results (from GitHub API):**
+            - Overall CI Status: ${{ env.CI_OVERALL_STATUS }}
+            - All workflows checked: CI, PR Checks, Claude Code Review
             
             **Claude Review Sentiment:** ${{ env.CLAUDE_SENTIMENT }}
             **Target Branch:** ${{ github.event.pull_request.base.ref }}
@@ -228,12 +323,9 @@ jobs:
             **Key Findings:** [Summary of Claude's expert analysis or "No Claude review available"]
             
             ### 🔧 CI/CD Status Summary
-            **Overall:** [Pass/Fail]
-            **Test Results:** ${{ needs.test.result }}
-            **Security:** ${{ needs.security.result }}
-            **Compatibility:** ${{ needs.compatibility.result }}
-            **PR Validation:** ${{ needs.validate-pr.result }}
-            **Cross-platform:** ${{ needs.compatibility-check.result }}
+            **Overall:** ${{ env.CI_OVERALL_STATUS }}
+            **Workflows Checked:** CI, PR Checks, Claude Code Review
+            **Details:** [See context files for specific workflow results]
             
             ### ✅ Strengths
             - [List positive aspects of this PR]
