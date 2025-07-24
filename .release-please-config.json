@@ -1,0 +1,11 @@
+{
+  "packages": {
+    ".": {
+      "package-name": "@neublink/gitplus",
+      "release-type": "node",
+      "extra-files": [
+        "README.md"
+      ]
+    }
+  }
+}
