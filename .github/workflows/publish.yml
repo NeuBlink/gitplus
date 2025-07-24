@@ -13,10 +13,6 @@ on:
         required: true
         default: true
         type: boolean
-  # Temporary: Allow testing from feature branches
-  push:
-    branches:
-      - 'ci/enhance-pr-validation-checks'
 
 permissions:
   contents: write
@@ -50,7 +46,7 @@ jobs:
   publish:
     needs: test
     runs-on: ubuntu-latest
-    if: ${{ inputs.publish_npm || github.event_name == 'push' }}
+    if: ${{ inputs.publish_npm }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -93,7 +89,7 @@ jobs:
         NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         
     - name: Create and push tag
-      if: ${{ inputs.create_tag || github.event_name == 'push' }}
+      if: ${{ inputs.create_tag }}
       run: |
         # Check if tag already exists locally
         if git tag -l | grep -q "^${{ env.CURRENT_VERSION }}$"; then
@@ -116,7 +112,7 @@ jobs:
         git push origin --tags
         
     - name: Create GitHub Release
-      if: ${{ inputs.create_tag || github.event_name == 'push' }}
+      if: ${{ inputs.create_tag }}
       uses: actions/github-script@v7
       with:
         script: |
@@ -148,7 +144,7 @@ jobs:
   test-published:
     needs: publish
     runs-on: ubuntu-latest
-    if: ${{ inputs.publish_npm || github.event_name == 'push' }}
+    if: ${{ inputs.publish_npm }}
     steps:
     - name: Wait for NPM propagation
       run: |
