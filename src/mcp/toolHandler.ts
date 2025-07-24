@@ -22,9 +22,9 @@ export class ToolHandler {
 
   async handleToolCall(name: ToolName, args: Record<string, any>): Promise<ToolResult> {
     try {
-      // Validate repoPath
+      // Validate repoPath (optional for info tool)
       const { repoPath } = args;
-      if (!repoPath) {
+      if (!repoPath && name !== 'info') {
         return {
           content: [
             {
@@ -36,59 +36,30 @@ export class ToolHandler {
         };
       }
 
-      // Check if path exists
-      const fs = await import('fs').then(m => m.promises);
-      const path = await import('path');
-      
-      try {
-        const stat = await fs.stat(repoPath);
-        if (!stat.isDirectory()) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `❌ Error: Path is not a directory: ${repoPath}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `❌ Error: Directory not found: ${repoPath}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      // Create GitClient for this specific repository
-      const gitClient = new GitClient(repoPath);
-      
-      // Check if we're in a git repository, initialize if needed for MCP
-      const isRepo = await gitClient.isGitRepository();
-      if (!isRepo && name !== 'status') {
-        // For MCP, automatically initialize git repository
+      // Check if path exists (skip for info tool without repoPath)
+      if (repoPath) {
+        const fs = await import('fs').then(m => m.promises);
+        const path = await import('path');
+        
         try {
-          await gitClient.init();
-          const repoName = path.basename(repoPath);
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `✅ Initialized git repository in ${repoPath}\n\nNow proceeding with ${name} command...`,
+          const stat = await fs.stat(repoPath);
+          if (!stat.isDirectory()) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `❌ Error: Path is not a directory: ${repoPath}`,
               },
             ],
+            isError: true,
           };
-        } catch (initError) {
+        }
+        } catch (error) {
           return {
             content: [
               {
                 type: 'text',
-                text: `❌ Error: Not a git repository and failed to initialize.\n\nError: ${initError instanceof Error ? initError.message : 'Unknown error'}`,
+                text: `❌ Error: Directory not found: ${repoPath}`,
               },
             ],
             isError: true,
@@ -96,21 +67,56 @@ export class ToolHandler {
         }
       }
 
+      // Create GitClient for this specific repository (skip for info tool without repoPath)
+      let gitClient: GitClient | undefined;
+      if (repoPath) {
+        const path = await import('path');
+        gitClient = new GitClient(repoPath);
+        
+        // Check if we're in a git repository, initialize if needed for MCP
+        const isRepo = await gitClient.isGitRepository();
+        if (!isRepo && name !== 'status' && name !== 'info') {
+          // For MCP, automatically initialize git repository
+          try {
+            await gitClient.init();
+            const repoName = path.basename(repoPath);
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `✅ Initialized git repository in ${repoPath}\n\nNow proceeding with ${name} command...`,
+                },
+              ],
+            };
+          } catch (initError) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `❌ Error: Not a git repository and failed to initialize.\n\nError: ${initError instanceof Error ? initError.message : 'Unknown error'}`,
+                },
+              ],
+              isError: true,
+            };
+          }
+        }
+      }
+
       switch (name) {
         case 'ship':
-          return await this.handleShip(args, gitClient);
+          return await this.handleShip(args, gitClient!);
         case 'commit':
-          return await this.handleCommit(args, gitClient);
+          return await this.handleCommit(args, gitClient!);
         case 'analyze':
-          return await this.handleAnalyze(args, gitClient);
+          return await this.handleAnalyze(args, gitClient!);
         case 'suggest':
-          return await this.handleSuggest(args, gitClient);
+          return await this.handleSuggest(args, gitClient!);
         case 'pr_draft':
-          return await this.handlePRDraft(args, gitClient);
+          return await this.handlePRDraft(args, gitClient!);
         case 'status':
-          return await this.handleStatus(args, gitClient);
+          return await this.handleStatus(args, gitClient!);
         case 'merge_local':
-          return await this.handleMergeLocal(args, gitClient);
+          return await this.handleMergeLocal(args, gitClient!);
         case 'sync':
           return await this.handleSync(args);
         case 'stash':
@@ -123,6 +129,8 @@ export class ToolHandler {
           return await this.handleRecover(args);
         case 'validate':
           return await this.handleValidate(args);
+        case 'info':
+          return await this.handleInfo(args);
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
@@ -1392,6 +1400,148 @@ export class ToolHandler {
 
     } catch (error) {
       throw new Error(`Validation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Handle GitPlus MCP info request
+   */
+  async handleInfo(args: any): Promise<ToolResult> {
+    const { repoPath } = args;
+
+    try {
+      // Get current timestamp and version info
+      const now = new Date().toISOString();
+      
+      // Get package version
+      let version = '1.0.1';
+      try {
+        const packageJson = require('../../package.json');
+        version = packageJson.version;
+      } catch {
+        // Use fallback version
+      }
+
+      let infoText = `# 🚀 GitPlus MCP Server Information\n\n`;
+      infoText += `**Version:** ${version}\n`;
+      infoText += `**Server Type:** Model Context Protocol (MCP) Server\n`;
+      infoText += `**Generated:** ${now.split('T')[0]} ${now.split('T')[1]?.split('.')[0]} UTC\n\n`;
+
+      // Repository-specific information
+      if (repoPath) {
+        try {
+          const gitClient = new GitClient(repoPath);
+          const isRepo = await gitClient.isGitRepository();
+          
+          if (isRepo) {
+            const status = await gitClient.getStatus();
+            const platformManager = new PlatformManager(status.platform, status.remoteURL, repoPath);
+            const repoInfo = platformManager.parseRepositoryInfo();
+            
+            infoText += `## 📁 Current Repository\n\n`;
+            infoText += `**Path:** \`${repoPath}\`\n`;
+            infoText += `**Branch:** ${status.branch}\n`;
+            infoText += `**Platform:** ${status.platform}\n`;
+            if (repoInfo) {
+              infoText += `**Repository:** ${repoInfo.owner}/${repoInfo.repo}\n`;
+            }
+            if (status.remoteURL) {
+              infoText += `**Remote:** ${status.remoteURL}\n`;
+            }
+            infoText += `**Status:** ${status.isDirty ? 'Has changes' : 'Clean'}\n`;
+            if (status.staged.length > 0 || status.unstaged.length > 0 || status.untracked.length > 0) {
+              infoText += `**Files:** ${status.staged.length} staged, ${status.unstaged.length} unstaged, ${status.untracked.length} untracked\n`;
+            }
+            infoText += `\n`;
+          } else {
+            infoText += `## 📁 Directory Information\n\n`;
+            infoText += `**Path:** \`${repoPath}\`\n`;
+            infoText += `**Status:** ❌ Not a Git repository\n\n`;
+          }
+        } catch (error) {
+          infoText += `## ⚠️ Repository Access Issue\n\n`;
+          infoText += `**Path:** \`${repoPath}\`\n`;
+          infoText += `**Error:** ${error instanceof Error ? error.message : 'Unknown error'}\n\n`;
+        }
+      }
+
+      // Available tools
+      infoText += `## 🛠️ Available GitPlus Tools\n\n`;
+      infoText += `### Core Workflow Tools\n`;
+      infoText += `- **\`ship\`** - Complete git workflow: commit → push → PR\n`;
+      infoText += `- **\`commit\`** - AI-powered conventional commits\n`;
+      infoText += `- **\`analyze\`** - Analyze repository changes and provide insights\n`;
+      infoText += `- **\`status\`** - Enhanced git status with platform detection\n\n`;
+
+      infoText += `### AI-Powered Suggestions\n`;
+      infoText += `- **\`suggest\`** - Get AI suggestions for branches, commits, PR titles/descriptions\n`;
+      infoText += `- **\`pr_draft\`** - Generate pull request titles and descriptions\n\n`;
+
+      infoText += `### Repository Management\n`;
+      infoText += `- **\`sync\`** - Synchronize with remote repository\n`;
+      infoText += `- **\`merge_local\`** - Merge feature branches locally\n`;
+      infoText += `- **\`stash\`** - Manage git stash operations\n`;
+      infoText += `- **\`reset\`** - Reset repository state safely\n`;
+      infoText += `- **\`rebase\`** - Rebase branches with conflict handling\n`;
+      infoText += `- **\`recover\`** - Recover lost commits using reflog\n`;
+      infoText += `- **\`validate\`** - Validate repository health and integrity\n\n`;
+
+      // Usage examples
+      infoText += `## 💡 Common Usage Patterns\n\n`;
+      infoText += `### Quick Ship Workflow\n`;
+      infoText += `> "Ship my current changes to a new PR"\n\n`;
+      infoText += `### Smart Commits\n`;
+      infoText += `> "Commit my staged changes with an AI-generated message"\n\n`;
+      infoText += `### Repository Analysis\n`;
+      infoText += `> "Analyze my repository changes and suggest improvements"\n\n`;
+      infoText += `### AI Suggestions\n`;
+      infoText += `> "Suggest a branch name for my authentication feature"\n\n`;
+
+      // Features
+      infoText += `## ✨ Key Features\n\n`;
+      infoText += `- **🤖 AI-Powered**: Uses Claude AI for intelligent commit messages, branch names, and PR descriptions\n`;
+      infoText += `- **📋 Conventional Commits**: Follows strict conventional commit specification\n`;
+      infoText += `- **🔄 Smart Conflict Resolution**: AI-assisted conflict resolution\n`;
+      infoText += `- **🌐 Multi-Platform**: Supports GitHub, GitLab, and local repositories\n`;
+      infoText += `- **🚀 Complete Workflows**: One-command ship from changes to PR\n`;
+      infoText += `- **🔍 Repository Health**: Validation and integrity checks\n`;
+      infoText += `- **📊 Detailed Analysis**: Comprehensive change analysis with impact assessment\n\n`;
+
+      // Tips
+      infoText += `## 💭 Pro Tips\n\n`;
+      infoText += `- Always provide the **repoPath** parameter as an absolute path to your git repository\n`;
+      infoText += `- Use **\`status\`** first to understand your repository state\n`;
+      infoText += `- Try **\`analyze\`** to get AI insights before making commits\n`;
+      infoText += `- Use **\`dryRun: true\`** to preview operations before executing\n`;
+      infoText += `- The **\`ship\`** tool is your best friend for complete workflows\n\n`;
+
+      infoText += `## 📚 Need Help?\n\n`;
+      infoText += `- **Repository:** [NeuBlink/gitplus](https://github.com/NeuBlink/gitplus)\n`;
+      infoText += `- **Documentation:** Full README with examples and troubleshooting\n`;
+      infoText += `- **Issues:** Report bugs or request features on GitHub\n\n`;
+
+      infoText += `---\n`;
+      infoText += `*GitPlus MCP Server - AI-Powered Git Automation for Claude Code*`;
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: infoText,
+          },
+        ],
+      };
+
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `❌ **Info Error**\n\nFailed to generate GitPlus information: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        ],
+        isError: true,
+      };
     }
   }
 }

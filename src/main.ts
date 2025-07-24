@@ -9,7 +9,8 @@ import { createMCPServer } from './mcp/server';
 import { MCPTransport } from './types';
 
 /**
- * Checks if MCP server mode is requested
+ * Checks if MCP server mode is requested by looking for the --mcp flag
+ * @returns {boolean} True if --mcp flag is present in command line arguments
  */
 function shouldRunAsMCPServer(): boolean {
   const args = process.argv.slice(2);
@@ -17,7 +18,9 @@ function shouldRunAsMCPServer(): boolean {
 }
 
 /**
- * Runs the MCP server
+ * Runs the MCP server using stdio transport
+ * Logs to stderr to keep stdout available for MCP communication
+ * @throws {Error} If the MCP server fails to start
  */
 async function runMCPServer() {
   // MCP servers typically use stdio transport
@@ -44,15 +47,19 @@ async function runMCPServer() {
 }
 
 /**
- * Runs the CLI interface
+ * Runs the CLI interface by dynamically importing the CLI module
+ * The CLI module automatically executes when imported due to program.parse()
+ * @throws {Error} If the CLI module fails to load or execute
  */
 async function runCLI() {
   // The CLI module automatically executes when imported due to program.parse() at the end
-  await import('./cli.js');
+  await import('./cli');
 }
 
 /**
- * Main entry point
+ * Main entry point that routes to MCP server or CLI mode based on arguments
+ * Checks for --mcp flag to determine which mode to run
+ * @throws {Error} If either mode fails to start
  */
 async function main() {
   try {

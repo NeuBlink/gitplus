@@ -24,8 +24,10 @@ Gitplus is a Model Context Protocol (MCP) server that brings AI-powered git auto
 Install gitplus as an MCP server in Claude Code:
 
 ```bash
-claude mcp add gitplus -- npx @neublink/gitplus@latest
+claude mcp add gitplus -- npx @neublink/gitplus@latest --mcp
 ```
+
+The `--mcp` flag ensures the package starts in MCP server mode for Claude Code integration.
 
 ### Local Development Installation
 
@@ -62,13 +64,13 @@ npm install
 npm run build
 
 # Fix file permissions (required after build)
-chmod +x dist/cli.js dist/index.js
+chmod +x dist/main.js dist/cli.js dist/index.js
 
 # Install CLI globally for command line usage
 npm link
 
 # Add to Claude Code as MCP server (using linked command)
-claude mcp add gitplus-local -- node $(pwd)/dist/index.js
+claude mcp add gitplus-local -- node $(pwd)/dist/main.js --mcp
 ```
 
 **Note**: The `gp` alias may conflict with existing shell aliases for `git push`. Use the `gitplus` command if `gp` doesn't work.
@@ -317,7 +319,7 @@ npm run build
 npm link
 
 # Add to Claude Code as MCP server (local development)
-claude mcp add gitplus-local -- node $(pwd)/dist/index.js
+claude mcp add gitplus-local -- node $(pwd)/dist/main.js --mcp
 ```
 
 After setup:
@@ -458,12 +460,12 @@ Gitplus works out-of-the-box with sensible defaults. For advanced users, configu
 #### MCP Server Connection Failed
 **Issue**: Claude Code shows gitplus-local as ✘ failed.  
 **Solutions**:
-1. Ensure files are executable: `chmod +x dist/cli.js dist/index.js`
+1. Ensure files are executable: `chmod +x dist/main.js dist/cli.js dist/index.js`
 2. Rebuild the project: `npm run build`
 3. Remove and re-add MCP server:
    ```bash
    claude mcp remove gitplus-local
-   claude mcp add gitplus-local -- node $(pwd)/dist/index.js
+   claude mcp add gitplus-local -- node $(pwd)/dist/main.js --mcp
    ```
 
 #### CLI Commands Not Found
@@ -474,15 +476,15 @@ Gitplus works out-of-the-box with sensible defaults. For advanced users, configu
 3. Rebuild and relink:
    ```bash
    npm run build
-   chmod +x dist/cli.js dist/index.js
+   chmod +x dist/main.js dist/cli.js dist/index.js
    npm link
    ```
 
 #### Permission Denied Errors
-**Issue**: `permission denied: /path/to/dist/index.js`  
+**Issue**: `permission denied: /path/to/dist/main.js`  
 **Solution**: Files need execute permissions after build:
 ```bash
-chmod +x dist/cli.js dist/index.js
+chmod +x dist/main.js dist/cli.js dist/index.js
 ```
 
 #### AI Integration Not Working
@@ -559,7 +561,7 @@ npm link
 gitplus --help
 
 # Add to Claude Code for MCP testing
-claude mcp add gitplus-local -- node $(pwd)/dist/index.js
+claude mcp add gitplus-local -- node $(pwd)/dist/main.js --mcp
 ```
 
 ## License
