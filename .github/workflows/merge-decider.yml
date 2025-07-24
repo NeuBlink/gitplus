@@ -9,7 +9,7 @@ on:
 
 # Ensure only one merge decision runs per PR
 concurrency:
-  group: merge-decider-${{ github.event.pull_request.number || github.run_id }}
+  group: merge-decider-${{ github.event.pull_request.number || github.run_number }}
   cancel-in-progress: true
 
 permissions:
