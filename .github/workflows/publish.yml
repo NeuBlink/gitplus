@@ -23,6 +23,11 @@ on:
         default: true
         type: boolean
 
+permissions:
+  contents: write
+  packages: write
+  actions: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -76,6 +81,11 @@ jobs:
     - name: Build project
       run: npm run build
       
+    - name: Validate NPM token
+      run: npm whoami
+      env:
+        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      
     - name: Bump version
       run: |
         NEW_VERSION=$(npm version ${{ inputs.version_type }} --no-git-tag-version)
@@ -91,7 +101,7 @@ jobs:
       if: ${{ inputs.create_tag }}
       run: |
         git tag ${{ env.NEW_VERSION }}
-        git push origin main --tags
+        git push origin HEAD --tags
         
     - name: Publish to NPM
       run: npm publish --access public
@@ -100,30 +110,33 @@ jobs:
         
     - name: Create GitHub Release
       if: ${{ inputs.create_tag }}
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: actions/github-script@v7
       with:
-        tag_name: ${{ env.NEW_VERSION }}
-        release_name: Release ${{ env.NEW_VERSION }}
-        body: |
-          ## 🚀 Release ${{ env.NEW_VERSION }}
+        script: |
+          const { data: release } = await github.rest.repos.createRelease({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            tag_name: '${{ env.NEW_VERSION }}',
+            name: 'Release ${{ env.NEW_VERSION }}',
+            body: `## 🚀 Release ${{ env.NEW_VERSION }}
           
-          Published to NPM: `npm install -g @gitplus/mcp@${{ env.NEW_VERSION }}`
+          Published to NPM: \`npm install -g @gitplus/mcp@${{ env.NEW_VERSION }}\`
           
           ### Installation
-          ```bash
+          \`\`\`bash
           # Install as MCP server in Claude Code
           claude mcp add gitplus -- npx @gitplus/mcp@${{ env.NEW_VERSION }}
           
           # Or install CLI globally
           npm install -g @gitplus/mcp@${{ env.NEW_VERSION }}
-          ```
+          \`\`\`
           
           ### Changes
-          Auto-generated from commits since last release.
-        draft: false
-        prerelease: false
+          Auto-generated from commits since last release.`,
+            draft: false,
+            prerelease: false
+          });
+          console.log('Created release:', release.html_url);
 
   test-published:
     needs: publish
@@ -131,12 +144,21 @@ jobs:
     if: ${{ inputs.publish_npm }}
     steps:
     - name: Wait for NPM propagation
-      run: sleep 30
+      run: |
+        echo "Waiting for NPM package propagation..."
+        for i in {1..6}; do
+          if npm view @gitplus/mcp@latest version 2>/dev/null; then
+            echo "Package is available on NPM"
+            break
+          fi
+          echo "Attempt $i: Package not yet available, waiting 30 seconds..."
+          sleep 30
+        done
       
     - name: Test NPM installation
       run: |
         # Test global CLI installation
-        npm install -g @gitplus/mcp@${{ needs.publish.outputs.version || 'latest' }}
+        npm install -g @gitplus/mcp@latest
         
         # Test CLI commands
         gitplus --version
