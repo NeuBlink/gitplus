@@ -3,17 +3,8 @@ name: Manual Publish
 on:
   workflow_dispatch:
     inputs:
-      version_type:
-        description: 'Version bump type'
-        required: true
-        default: 'patch'
-        type: choice
-        options:
-        - patch
-        - minor
-        - major
       create_tag:
-        description: 'Create git tag'
+        description: 'Create git tag after publish'
         required: true
         default: true
         type: boolean
@@ -86,46 +77,39 @@ jobs:
       env:
         NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       
-    - name: Bump version
+    - name: Get current version
       run: |
-        NEW_VERSION=$(npm version ${{ inputs.version_type }} --no-git-tag-version)
-        echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
-        echo "Version bumped to: $NEW_VERSION"
-        
-    - name: Commit version bump
-      run: |
-        git add package.json package-lock.json
-        git commit -m "chore: bump version to ${{ env.NEW_VERSION }}"
-        
-    - name: Create and push tag
-      if: ${{ inputs.create_tag }}
-      run: |
-        # Check if tag already exists locally
-        if git tag -l | grep -q "^${{ env.NEW_VERSION }}$"; then
-          echo "⚠️ Tag ${{ env.NEW_VERSION }} already exists locally, deleting it"
-          git tag -d ${{ env.NEW_VERSION }}
-        fi
-        
-        # Check if tag exists on remote
-        if git ls-remote --tags origin | grep -q "refs/tags/${{ env.NEW_VERSION }}$"; then
-          echo "⚠️ Tag ${{ env.NEW_VERSION }} already exists on remote"
-          echo "This usually means a previous publish partially completed"
-          echo "Deleting remote tag and recreating..."
-          git push origin --delete ${{ env.NEW_VERSION }} || echo "Tag deletion failed or tag doesn't exist on remote"
-        fi
-        
-        # Create the tag
-        git tag ${{ env.NEW_VERSION }}
-        echo "✅ Created tag ${{ env.NEW_VERSION }}"
-        
-        # Push commits and tags
-        git push origin main
-        git push origin --tags
+        CURRENT_VERSION=$(node -p "require('./package.json').version")
+        echo "CURRENT_VERSION=v$CURRENT_VERSION" >> $GITHUB_ENV
+        echo "Publishing version: v$CURRENT_VERSION"
         
     - name: Publish to NPM
       run: npm publish --access public
       env:
         NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        
+    - name: Create and push tag
+      if: ${{ inputs.create_tag }}
+      run: |
+        # Check if tag already exists locally
+        if git tag -l | grep -q "^${{ env.CURRENT_VERSION }}$"; then
+          echo "⚠️ Tag ${{ env.CURRENT_VERSION }} already exists locally, deleting it"
+          git tag -d ${{ env.CURRENT_VERSION }}
+        fi
+        
+        # Check if tag exists on remote
+        if git ls-remote --tags origin | grep -q "refs/tags/${{ env.CURRENT_VERSION }}$"; then
+          echo "⚠️ Tag ${{ env.CURRENT_VERSION }} already exists on remote"
+          echo "Deleting existing tag and recreating..."
+          git push origin --delete ${{ env.CURRENT_VERSION }} || echo "Tag deletion failed or tag doesn't exist on remote"
+        fi
+        
+        # Create the tag pointing to current HEAD (no new commits)
+        git tag ${{ env.CURRENT_VERSION }}
+        echo "✅ Created tag ${{ env.CURRENT_VERSION }}"
+        
+        # Push only the tag (no commits)
+        git push origin --tags
         
     - name: Create GitHub Release
       if: ${{ inputs.create_tag }}
@@ -135,19 +119,19 @@ jobs:
           const { data: release } = await github.rest.repos.createRelease({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            tag_name: '${{ env.NEW_VERSION }}',
-            name: 'Release ${{ env.NEW_VERSION }}',
-            body: `## 🚀 Release ${{ env.NEW_VERSION }}
+            tag_name: '${{ env.CURRENT_VERSION }}',
+            name: 'Release ${{ env.CURRENT_VERSION }}',
+            body: `## 🚀 Release ${{ env.CURRENT_VERSION }}
           
-          Published to NPM: \`npm install -g @neublink/gitplus@${{ env.NEW_VERSION }}\`
+          Published to NPM: \`npm install -g @neublink/gitplus@${{ env.CURRENT_VERSION }}\`
           
           ### Installation
           \`\`\`bash
           # Install as MCP server in Claude Code
-          claude mcp add gitplus -- npx @neublink/gitplus@${{ env.NEW_VERSION }}
+          claude mcp add gitplus -- npx @neublink/gitplus@${{ env.CURRENT_VERSION }}
           
           # Or install CLI globally
-          npm install -g @neublink/gitplus@${{ env.NEW_VERSION }}
+          npm install -g @neublink/gitplus@${{ env.CURRENT_VERSION }}
           \`\`\`
           
           ### Changes
