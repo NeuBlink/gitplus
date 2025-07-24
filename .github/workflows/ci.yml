@@ -49,7 +49,7 @@ jobs:
     - name: Test CLI installation
       run: |
         npm pack
-        npm install -g gitplus-mcp-*.tgz
+        npm install -g *.tgz
         gitplus --version || echo "CLI install test completed"
 
   security:

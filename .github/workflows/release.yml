@@ -102,10 +102,10 @@ jobs:
         ## Installation
         \`\`\`bash
         # Install as MCP server in Claude Code
-        claude mcp add gitplus -- npx @gitplus/mcp@$VERSION
+        claude mcp add gitplus -- npx @neublink/gitplus@$VERSION
         
         # Or install CLI globally
-        npm install -g @gitplus/mcp@$VERSION
+        npm install -g @neublink/gitplus@$VERSION
         \`\`\`
         
         ## Full Changelog
@@ -138,7 +138,7 @@ jobs:
         VERSION=${GITHUB_REF#refs/tags/v}
         
         # Test global CLI installation
-        npm install -g @gitplus/mcp@$VERSION
+        npm install -g @neublink/gitplus@$VERSION
         
         # Test CLI commands
         gitplus --version
