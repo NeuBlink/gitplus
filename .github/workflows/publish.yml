@@ -100,7 +100,25 @@ jobs:
     - name: Create and push tag
       if: ${{ inputs.create_tag }}
       run: |
+        # Check if tag already exists locally
+        if git tag -l | grep -q "^${{ env.NEW_VERSION }}$"; then
+          echo "⚠️ Tag ${{ env.NEW_VERSION }} already exists locally, deleting it"
+          git tag -d ${{ env.NEW_VERSION }}
+        fi
+        
+        # Check if tag exists on remote
+        if git ls-remote --tags origin | grep -q "refs/tags/${{ env.NEW_VERSION }}$"; then
+          echo "⚠️ Tag ${{ env.NEW_VERSION }} already exists on remote"
+          echo "This usually means a previous publish partially completed"
+          echo "Deleting remote tag and recreating..."
+          git push origin --delete ${{ env.NEW_VERSION }} || echo "Tag deletion failed or tag doesn't exist on remote"
+        fi
+        
+        # Create the tag
         git tag ${{ env.NEW_VERSION }}
+        echo "✅ Created tag ${{ env.NEW_VERSION }}"
+        
+        # Push commits and tags
         git push origin main
         git push origin --tags
         
