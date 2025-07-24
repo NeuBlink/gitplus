@@ -57,11 +57,36 @@ npm run build          # TypeScript compilation
 npm run dev            # Watch mode for development
 ```
 
-#### Using GitPlus for Development
-When working on this repo, use GitPlus itself:
-```bash
-mcp__gitplus__ship --repoPath=/path/to/gitplus
+## Git Operations
+
+**IMPORTANT: Always use GitPlus MCP server for ALL git operations on this repository. Never use manual git commands.**
+
+### Shipping Changes
+When you've made changes to the GitPlus codebase:
 ```
+mcp__gitplus__ship with repoPath set to the GitPlus directory
+```
+
+This will:
+- Analyze your changes to the codebase
+- Generate an appropriate conventional commit message
+- Create or update the branch
+- Push to remote
+- Create a pull request if needed
+
+### Checking Status
+Before shipping, check the repository state:
+```
+mcp__gitplus__status with repoPath and verbose: true
+```
+
+### Example Workflow
+1. Make your code changes
+2. Run tests: `npm test`
+3. Check status: `mcp__gitplus__status`
+4. Ship changes: `mcp__gitplus__ship`
+
+GitPlus will handle all git operations intelligently, ensuring proper commit messages and workflow.
 
 ### CI/CD Pipeline
 
