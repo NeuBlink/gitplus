@@ -439,7 +439,7 @@ export class ToolHandler {
 
         // Phase 6: PR creation with enhanced error handling
         if (pushSuccess && !noPR) {
-          const platformManager = new PlatformManager(updatedStatus.platform, updatedStatus.remoteURL);
+          const platformManager = new PlatformManager(updatedStatus.platform, updatedStatus.remoteURL, repoPath);
           const capabilities = await platformManager.getCapabilities();
 
           if (capabilities.canCreatePR) {
@@ -692,7 +692,7 @@ export class ToolHandler {
         contextFile 
       });
 
-      const platformManager = new PlatformManager(status.platform, status.remoteURL);
+      const platformManager = new PlatformManager(status.platform, status.remoteURL, gitClient.getWorkingDirectory());
       const terminology = platformManager.getPRTerminology();
 
       // Try to use AI for PR generation
@@ -757,7 +757,7 @@ export class ToolHandler {
       }
 
       const status = await gitClient.getStatus();
-      const platformManager = new PlatformManager(status.platform, status.remoteURL);
+      const platformManager = new PlatformManager(status.platform, status.remoteURL, gitClient.getWorkingDirectory());
       const capabilities = await platformManager.getCapabilities();
       const repoInfo = platformManager.parseRepositoryInfo();
 
