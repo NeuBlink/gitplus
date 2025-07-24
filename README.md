@@ -463,7 +463,7 @@ Gitplus works out-of-the-box with sensible defaults. For advanced users, configu
 3. Remove and re-add MCP server:
    ```bash
    claude mcp remove gitplus-local
-   claude mcp add gitplus-local -- gitplus-mcp
+   claude mcp add gitplus-local -- node $(pwd)/dist/index.js
    ```
 
 #### CLI Commands Not Found
