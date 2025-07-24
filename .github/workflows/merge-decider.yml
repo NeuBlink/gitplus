@@ -27,7 +27,7 @@ jobs:
           fetch-depth: 1
 
       - name: Wait for test jobs to complete
-        uses: fountainhead/action-wait-for-check@6bb13cd5411b148de5b7563b6d2d2c8e7ff1a618 # v1.2.0
+        uses: fountainhead/action-wait-for-check@5a908a24814494009c4bb27c242ea38c93c593be # v1.2.0
         id: wait-for-tests
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -37,7 +37,7 @@ jobs:
           intervalSeconds: 10
       
       - name: Wait for security checks to complete
-        uses: fountainhead/action-wait-for-check@6bb13cd5411b148de5b7563b6d2d2c8e7ff1a618 # v1.2.0
+        uses: fountainhead/action-wait-for-check@5a908a24814494009c4bb27c242ea38c93c593be # v1.2.0
         id: wait-for-security
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
