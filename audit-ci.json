@@ -1,0 +1,9 @@
+{
+  "moderate": true,
+  "high": true,
+  "critical": true,
+  "allowlist": [],
+  "skipAudit": false,
+  "report-type": "summary",
+  "output-format": "text"
+}

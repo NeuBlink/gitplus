@@ -132,7 +132,17 @@ export class AIService {
             resolve({
               success: false,
               content: '',
-              error: `Claude CLI error (${code}): ${stderr}`
+              error: `Claude CLI error (exit code ${code}): ${stderr || 'Process failed with no error message'}`
+            });
+            return;
+          }
+
+          // Handle timeout specifically
+          if (code === null) {
+            resolve({
+              success: false,
+              content: '',
+              error: `Claude CLI timeout after ${this.timeout}ms`
             });
             return;
           }
@@ -143,7 +153,7 @@ export class AIService {
             resolve({
               success: false,
               content: '',
-              error: `Claude CLI error: ${stderr || 'No output received'}`
+              error: `Claude CLI error: ${stderr || 'No output received from Claude API'}`
             });
             return;
           }
@@ -158,7 +168,7 @@ export class AIService {
           resolve({
             success: false,
             content: '',
-            error: `Failed to execute Claude CLI: ${error.message}`
+            error: `Failed to execute Claude CLI at ${this.claudeCommand}: ${error.message}. Check if Claude CLI is installed and in PATH.`
           });
         });
       });
@@ -166,7 +176,7 @@ export class AIService {
       return {
         success: false,
         content: '',
-        error: `Failed to execute Claude CLI: ${error.message}`
+        error: `Unexpected error in Claude CLI execution: ${error.message || 'Unknown error occurred'}`
       };
     }
   }
@@ -256,6 +266,11 @@ Look for: API changes, removed functions, changed signatures, removed exports, m
       return null;
     }
 
+    if (!response.content || response.content.trim().length === 0) {
+      console.error('AI commit generation returned empty response');
+      return null;
+    }
+
     try {
       // Parse Claude CLI wrapper response
       let actualContent = response.content;
@@ -264,11 +279,12 @@ Look for: API changes, removed functions, changed signatures, removed exports, m
         if (wrapper.type === 'result' && wrapper.subtype === 'success' && wrapper.result) {
           actualContent = wrapper.result;
         } else if (wrapper.subtype === 'error_during_execution') {
-          console.error('Claude CLI execution error for commit message');
+          console.error('Claude CLI execution error for commit message:', wrapper.error || 'Unknown execution error');
           return null;
         }
-      } catch {
+      } catch (wrapperError) {
         // Not a wrapper, use content directly
+        console.debug('Not a Claude CLI wrapper response, using content directly');
       }
       
       // Clean up the content and extract JSON
@@ -286,7 +302,21 @@ Look for: API changes, removed functions, changed signatures, removed exports, m
       
       if (jsonStart !== -1 && jsonEnd !== -1 && jsonStart < jsonEnd) {
         jsonContent = jsonContent.substring(jsonStart, jsonEnd + 1);
-        const parsed = JSON.parse(jsonContent);
+        
+        let parsed;
+        try {
+          parsed = JSON.parse(jsonContent);
+        } catch (jsonError) {
+          console.error('Invalid JSON in AI response for commit message:', jsonError instanceof Error ? jsonError.message : 'Unknown parse error');
+          console.error('JSON content sample:', jsonContent.substring(0, 200));
+          return null;
+        }
+        
+        // Validate required fields
+        if (!parsed.type || !parsed.message) {
+          console.error('AI response missing required fields (type, message):', parsed);
+          return null;
+        }
         
         // Handle breaking changes in message format
         let message = parsed.message || '';
@@ -310,10 +340,11 @@ Look for: API changes, removed functions, changed signatures, removed exports, m
       }
       
       console.error('No valid JSON found in commit message response');
+      console.error('Response content sample:', actualContent.substring(0, 500));
       return null;
     } catch (error) {
-      console.error('Failed to parse AI response:', error);
-      console.error('Raw content:', response.content);
+      console.error('Failed to parse AI response:', error instanceof Error ? error.message : 'Unknown error');
+      console.error('Raw content sample:', response.content.substring(0, 500));
       return null;
     }
   }

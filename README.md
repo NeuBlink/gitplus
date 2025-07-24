@@ -1,5 +1,11 @@
 # Gitplus - AI-Powered Git Automation for Claude Code
 
+[![npm version](https://badge.fury.io/js/%40gitplus%2Fmcp.svg)](https://badge.fury.io/js/%40gitplus%2Fmcp)
+[![CI](https://github.com/neublink/gitplus/workflows/CI/badge.svg)](https://github.com/neublink/gitplus/actions)
+[![codecov](https://codecov.io/gh/neublink/gitplus/branch/main/graph/badge.svg)](https://codecov.io/gh/neublink/gitplus)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js](https://img.shields.io/node/v/@gitplus/mcp.svg)](https://nodejs.org/)
+
 Gitplus is a Model Context Protocol (MCP) server that brings AI-powered git automation directly to Claude Code. Streamline your git workflow with intelligent commit messages, branch suggestions, and automated pull request creation.
 
 ## Features
@@ -100,10 +106,50 @@ Get current repository status with platform detection
 
 ### 🔧 `merge_local`
 Merge a local branch into current branch
-- **branch**: Branch to merge into current branch *required*
-- **noFf**: Force merge commit (no fast-forward)
-- **squash**: Squash commits during merge
-- **dryRun**: Preview merge without executing
+- **branchName**: Branch to merge into current branch *required*
+- **baseBranch**: Base branch to merge into (default: main)
+- **deleteAfter**: Delete feature branch after merge (default: true)
+- **confirm**: User confirmation to proceed with merge *required*
+
+### 🔄 `sync`
+Synchronize with remote repository using fetch/pull with intelligent conflict handling
+- **strategy**: Synchronization strategy (merge, rebase, fetch-only) (default: merge)
+- **remote**: Remote name (default: origin)
+- **branch**: Branch to sync (default: current branch)
+- **autoResolve**: Automatic conflict resolution strategy (ours, theirs, manual)
+- **force**: Force synchronization (use with caution)
+
+### 📦 `stash`
+Manage git stash for temporary storage of changes
+- **action**: Stash action to perform (push, pop, apply, drop, list) *required*
+- **message**: Stash message (for push action)
+- **includeUntracked**: Include untracked files in stash
+- **stashIndex**: Stash index for pop/apply/drop actions
+
+### 🔄 `reset`
+Reset repository state to undo changes with different modes
+- **mode**: Reset mode (soft, mixed, hard) *required*
+- **target**: Target commit/branch to reset to (default: HEAD)
+- **files**: Specific files to reset (optional)
+- **confirm**: Confirmation for destructive operations
+
+### 🔀 `rebase`
+Rebase current branch onto another branch with conflict handling
+- **onto**: Branch to rebase onto
+- **interactive**: Start interactive rebase
+- **action**: Rebase action (start, continue, abort, skip) (default: start)
+- **autoResolve**: Automatic conflict resolution strategy (ours, theirs, manual)
+
+### 🔍 `recover`
+Recover lost commits or changes using reflog and advanced git recovery
+- **action**: Recovery action to perform (show-reflog, recover-commit, show-lost) *required*
+- **commitHash**: Commit hash to recover (for recover-commit action)
+- **limit**: Number of reflog entries to show (default: 20)
+
+### ✅ `validate`
+Validate repository integrity, health, and detect issues
+- **deep**: Perform deep validation including remote connectivity
+- **fix**: Attempt to fix issues automatically
 
 ## Conventional Commits
 
@@ -246,6 +292,31 @@ gp suggest pr_title       # AI PR title suggestion
 # Complete ship workflow (dry run)
 gitplus ship --dry-run    # Preview full workflow
 gp ship --no-pr          # Commit and push without PR
+
+# Synchronize with remote
+gitplus sync --strategy merge    # Merge remote changes
+gp sync --strategy rebase        # Rebase on remote changes
+
+# Manage stash operations
+gitplus stash push -m "WIP: feature work"  # Create stash
+gitplus stash list                         # List all stashes
+gp stash pop                              # Apply and remove latest stash
+
+# Safe repository resets
+gitplus reset mixed               # Reset index, keep working directory
+gp reset hard --confirm          # Hard reset (requires confirmation)
+
+# Interactive rebasing
+gitplus rebase main               # Rebase current branch onto main
+gp rebase --action continue      # Continue interrupted rebase
+
+# Recover lost work
+gitplus recover show-reflog       # Show recent reflog entries
+gp recover recover-commit --commit abc123  # Recover specific commit
+
+# Repository validation
+gitplus validate --deep           # Deep repository health check
+gp validate --fix                # Attempt to fix issues automatically
 ```
 
 ### Available Commands
@@ -257,6 +328,12 @@ gp ship --no-pr          # Commit and push without PR
 | `gitplus analyze` | `gp analyze` | AI analysis of repository changes |
 | `gitplus suggest <type>` | `gp suggest <type>` | AI suggestions for branch/commit/PR |
 | `gitplus status` | `gp status` | Enhanced git status with platform detection |
+| `gitplus sync` | `gp sync` | Synchronize with remote repository |
+| `gitplus stash <action>` | `gp stash <action>` | Manage git stash operations |
+| `gitplus reset <mode>` | `gp reset <mode>` | Reset repository state safely |
+| `gitplus rebase [onto]` | `gp rebase [onto]` | Interactive and automatic rebasing |
+| `gitplus recover <action>` | `gp recover <action>` | Recover lost commits using reflog |
+| `gitplus validate` | `gp validate` | Validate repository health and integrity |
 
 Note: The CLI also supports all MCP tools when built and run locally.
 
@@ -306,9 +383,72 @@ Gitplus works out-of-the-box with sensible defaults. For advanced users, configu
 - ✅ **GitLab**: Full platform detection and MR creation via GitLab CLI
 - ✅ **Auto-detection**: Automatically detects platform from remote URL
 
+## CI/CD & Release Process
+
+### Automated Testing
+- **Continuous Integration**: All PRs are automatically tested across Node.js 18, 20, and 22
+- **Cross-platform**: Tests run on Ubuntu, macOS, and Windows
+- **Security Scanning**: Automated vulnerability detection and dependency audits
+- **Code Coverage**: Test coverage reports via Codecov
+
+### Release Process
+1. **Create a release tag**: `git tag v1.x.x && git push origin v1.x.x`
+2. **Automated publishing**: GitHub Actions automatically:
+   - Runs full test suite
+   - Builds the package
+   - Publishes to NPM
+   - Creates GitHub release with changelog
+   - Verifies published package functionality
+
+### Development Workflow
+```bash
+# Install dependencies
+npm install
+
+# Run development build
+npm run dev
+
+# Run tests
+npm test
+
+# Run full validation (typecheck + tests)
+npm run validate
+
+# Build for production
+npm run build
+```
+
 ## Contributing
 
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
+We welcome contributions! Please follow these guidelines:
+
+### Pull Request Process
+1. **Fork the repository** and create a feature branch
+2. **Follow conventional commits**: `feat:`, `fix:`, `docs:`, etc.
+3. **Add tests** for new functionality
+4. **Update documentation** as needed
+5. **Ensure CI passes** before requesting review
+
+### Code Standards
+- **TypeScript**: All code must be properly typed
+- **Testing**: Maintain >80% test coverage
+- **Conventional Commits**: Use semantic commit messages
+- **Security**: No credentials in code, audit dependencies regularly
+
+### Development Setup
+```bash
+# Clone and setup
+git clone https://github.com/neublink/gitplus.git
+cd gitplus
+npm install
+
+# Link for local testing
+npm link
+gitplus --help
+
+# Run in development mode
+npm run dev
+```
 
 ## License
 
