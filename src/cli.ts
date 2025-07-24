@@ -2,10 +2,24 @@
 
 import { Command } from 'commander';
 import prompts from 'prompts';
+import { readFileSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { GitClient } from './git/client';
 import { ChangeAnalyzer } from './git/analyzer';
 import { PlatformManager } from './git/platform';
 import { Platform } from './types';
+
+// Get package version
+function getPackageVersion(): string {
+  try {
+    const packageJsonPath = join(dirname(__dirname), 'package.json');
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+    return packageJson.version;
+  } catch (error) {
+    return '1.0.0'; // fallback version
+  }
+}
 
 const program = new Command();
 
@@ -52,7 +66,7 @@ program
   .name('gitplus')
   .alias('gp')
   .description('AI-powered Git automation CLI')
-  .version('1.0.0');
+  .version(getPackageVersion());
 
 // Commit command
 program

@@ -33,6 +33,9 @@ jobs:
     - name: Run type checking
       run: npm run typecheck
       
+    - name: Build project
+      run: npm run build
+      
     - name: Run tests
       run: npm run test:coverage
       
@@ -42,9 +45,6 @@ jobs:
       with:
         file: ./coverage/lcov.info
         fail_ci_if_error: false
-        
-    - name: Build project
-      run: npm run build
       
     - name: Test CLI installation
       run: |
