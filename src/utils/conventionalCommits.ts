@@ -18,18 +18,19 @@ export interface ValidationResult {
 }
 
 /**
- * Conventional commit types with their purposes
+ * Conventional commit types as per specification
+ * Based on https://www.conventionalcommits.org/en/v1.0.0/#specification
  */
 export const COMMIT_TYPES: Record<ConventionalCommitType, string> = {
-  feat: 'A new feature for users',
-  fix: 'A bug fix for users',
+  feat: 'A new feature (correlates with MINOR in semantic versioning)',
+  fix: 'A bug fix (correlates with PATCH in semantic versioning)',
   docs: 'Documentation only changes',
-  style: 'Changes that do not affect the meaning of code (formatting, etc)',
+  style: 'Changes that do not affect the meaning of the code (white-space, formatting, missing semi-colons, etc)',
   refactor: 'A code change that neither fixes a bug nor adds a feature',
   perf: 'A code change that improves performance',
   test: 'Adding missing tests or correcting existing tests',
-  build: 'Changes affecting build system or external dependencies',
-  ci: 'Changes to CI configuration files and scripts',
+  build: 'Changes that affect the build system or external dependencies (example scopes: gulp, broccoli, npm)',
+  ci: 'Changes to our CI configuration files and scripts (example scopes: Travis, Circle, BrowserStack, SauceLabs)',
   chore: 'Other changes that don\'t modify src or test files'
 };
 
@@ -44,14 +45,16 @@ export function validateConventionalCommit(message: string): ValidationResult {
     return { valid: false, errors: ['Commit message is empty'], warnings: [] };
   }
 
-  // Parse conventional commit format: type(scope)!: description
-  const conventionalPattern = /^(\w+)(\([^)]+\))?(!)?: (.+)$/;
+  // Parse conventional commit format: <type>[optional scope]: <description>
+  // According to specification: type(scope)!: description OR type!: description OR type(scope): description OR type: description
+  // Allow broader scope patterns so we can provide specific validation warnings
+  const conventionalPattern = /^([a-zA-Z]+)(\([^)]+\))?(!)?: (.+)$/;
   const match = message.match(conventionalPattern);
   
   if (!match) {
     return {
       valid: false,
-      errors: ['Message does not follow conventional commit format: type(scope): description'],
+      errors: ['Message does not follow conventional commit format: <type>[optional scope]: <description>'],
       warnings: []
     };
   }
@@ -60,24 +63,35 @@ export function validateConventionalCommit(message: string): ValidationResult {
   const scope = scopeMatch ? scopeMatch.slice(1, -1) : undefined; // Remove parentheses
   
   // Validate type
-  if (!(type as ConventionalCommitType) || !COMMIT_TYPES[type as ConventionalCommitType]) {
-    errors.push(`Invalid commit type "${type}". Valid types: ${Object.keys(COMMIT_TYPES).join(', ')}`);
+  if (!type) {
+    errors.push('Commit type is required');
+  } else {
+    const lowerType = type.toLowerCase();
+    if (!COMMIT_TYPES[lowerType as ConventionalCommitType]) {
+      errors.push(`Invalid commit type "${type}". Valid types: ${Object.keys(COMMIT_TYPES).join(', ')}`);
+    }
+    
+    // Check if type is lowercase
+    if (type !== lowerType) {
+      warnings.push('Commit type should be lowercase');
+    }
   }
   
   // Validate scope format (if present)
   if (scope) {
     if (scope.includes(' ')) {
-      errors.push('Scope should not contain spaces, use kebab-case');
+      warnings.push('Scope should not contain spaces, use kebab-case');
     }
     if (scope !== scope.toLowerCase()) {
       warnings.push('Scope should be lowercase');
     }
   }
   
-  // Validate description
+  // Validate description according to conventional commits specification
   if (!description || description.trim().length === 0) {
     errors.push('Description is required');
   } else {
+    // Specification recommends keeping the first line under 50 characters
     if (description.length > 50) {
       warnings.push('Description should be under 50 characters for better readability');
     }
@@ -98,7 +112,7 @@ export function validateConventionalCommit(message: string): ValidationResult {
   }
 
   const parts: ConventionalCommitParts = {
-    type: type as ConventionalCommitType,
+    type: (type ? type.toLowerCase() : 'chore') as ConventionalCommitType,
     scope,
     breaking: !!breaking,
     description: (description || '').trim()

@@ -198,7 +198,7 @@ export class AIService {
     }>;
     projectType?: string;
   }): Promise<CommitSuggestion | null> {
-    const prompt = `Analyze these git changes and generate a strict Conventional Commits message according to the specification.
+    const prompt = `Analyze these git changes and generate a STRICT Conventional Commits message.
 
 FILES CHANGED:
 ${context.filesChanged.map(f => `- ${f}`).join('\n')}
@@ -216,45 +216,55 @@ RESPOND WITH JSON ONLY:
 {
   "message": "type(scope): description",
   "type": "feat|fix|docs|style|refactor|test|chore|perf|ci|build",
-  "scope": "optional scope (no spaces, kebab-case)",
+  "scope": "optional scope (kebab-case)",
   "description": "imperative mood description",
   "breaking": false,
   "body": "optional multiline body",
   "footer": "optional footer for breaking changes"
 }
 
-CONVENTIONAL COMMITS RULES:
-1. Format: type(scope): description
-2. Breaking changes: Use "!" after type/scope OR add BREAKING CHANGE: in footer
-3. Types:
-   - feat: new feature for users (not build tools)
-   - fix: bug fix for users (not build tools)  
-   - docs: documentation changes
-   - style: formatting, missing semicolons, etc (no code change)
-   - refactor: code restructuring without behavior change
-   - perf: performance improvements
-   - test: adding/correcting tests
-   - build: build system or external dependencies
-   - ci: CI configuration files and scripts
-   - chore: other changes that don't modify src or test files
-4. Scope: Component/file area affected (api, ui, auth, etc.)
-5. Description: Imperative mood, lowercase, no period, under 50 chars
-6. Breaking: Set to true if API changes break existing functionality
+STRICT CONVENTIONAL COMMITS SPECIFICATION:
+Format: <type>[optional scope]: <description>
+
+[optional body]
+
+[optional footer(s)]
+
+REQUIRED TYPES (only these are allowed):
+- feat: A new feature (correlates with MINOR in semantic versioning)
+- fix: A bug fix (correlates with PATCH in semantic versioning)  
+- docs: Documentation only changes
+- style: Changes that do not affect the meaning of the code (white-space, formatting, missing semi-colons, etc)
+- refactor: A code change that neither fixes a bug nor adds a feature
+- perf: A code change that improves performance
+- test: Adding missing tests or correcting existing tests
+- build: Changes that affect the build system or external dependencies
+- ci: Changes to CI configuration files and scripts
+- chore: Other changes that don't modify src or test files
+
+BREAKING CHANGES:
+- Add "!" after type/scope: feat(api)!: remove deprecated endpoints
+- OR include "BREAKING CHANGE:" in footer
+
+RULES:
+1. Type must be lowercase, from approved list above
+2. Scope is optional, lowercase, kebab-case if used
+3. Description: imperative mood, lowercase, no period, under 50 chars
+4. Breaking changes MUST be marked with ! or BREAKING CHANGE: footer
 
 EXAMPLES:
-- feat(auth): add OAuth2 login support
+- feat: add user authentication
 - fix(api): handle null response in user service  
 - docs: update installation instructions
-- style: fix indentation in login component
-- refactor(database): extract query builder logic
-- perf(parser): improve regex performance by 50%
-- test(auth): add unit tests for login validation
-- build(deps): update express to version 4.18
-- ci: add automated security scanning
-- chore(release): prepare version 2.1.0
+- style: fix indentation in components
+- refactor(auth): extract validation logic
+- perf: improve query performance by 50%
+- test: add unit tests for login
+- build: update dependencies
+- ci: add automated testing
+- chore: update license year
 
-BREAKING CHANGE DETECTION:
-Look for: API changes, removed functions, changed signatures, removed exports, major refactors, version bumps that could break compatibility.`;
+ANALYZE THE CHANGES AND GENERATE THE MOST APPROPRIATE CONVENTIONAL COMMIT MESSAGE.`;
 
     const response = await this.executeClaudeCommand(prompt, {
       outputFormat: 'json',
@@ -582,13 +592,13 @@ ${context.diff.substring(0, 3000)}${context.diff.length > 3000 ? '\n... (truncat
 ${context.recentCommits ? `RECENT COMMITS:
 ${context.recentCommits.slice(0, 3).map(c => `- ${c.message}`).join('\n')}` : ''}
 
-RESPOND WITH ONLY VALID JSON - NO MARKDOWN, NO EXPLANATIONS:
+RESPOND WITH ONLY VALID JSON FOLLOWING STRICT CONVENTIONAL COMMITS:
 
 {
   "commit": {
     "message": "conventional commit message under 50 characters",
     "type": "feat|fix|docs|style|refactor|test|chore|perf|ci|build",
-    "scope": "optional scope (kebab-case, no spaces)",
+    "scope": "optional scope (kebab-case)",
     "description": "imperative mood description",
     "breaking": false,
     "body": "optional multiline body",
@@ -600,7 +610,7 @@ RESPOND WITH ONLY VALID JSON - NO MARKDOWN, NO EXPLANATIONS:
     "alternative": "alternative-branch-name"
   },
   "analysis": {
-    "changeType": "feature|bugfix|refactor|docs|config|test|chore",
+    "changeType": "feat|fix|docs|style|refactor|test|chore|perf|ci|build",
     "impact": "low|medium|high",
     "risks": ["potential risks or concerns"],
     "suggestions": ["improvement suggestions"],
@@ -614,7 +624,14 @@ RESPOND WITH ONLY VALID JSON - NO MARKDOWN, NO EXPLANATIONS:
   }
 }
 
-CRITICAL: Return ONLY the JSON object above with your analysis. Do NOT include markdown formatting, code blocks, or any explanatory text. The response must start with { and end with }.`;
+CONVENTIONAL COMMITS SPECIFICATION COMPLIANCE:
+- Use ONLY approved types: feat, fix, docs, style, refactor, perf, test, build, ci, chore
+- Format: <type>[optional scope]: <description>
+- Breaking changes: Add ! after type/scope OR use BREAKING CHANGE: footer
+- Description: imperative mood, lowercase, no period, under 50 chars
+- Scope: optional, kebab-case if used
+
+CRITICAL: Return ONLY the JSON object above. No markdown formatting, code blocks, or explanatory text.`;
 
     const response = await this.executeClaudeCommand(prompt, {
       outputFormat: 'json',
