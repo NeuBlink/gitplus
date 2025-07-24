@@ -120,15 +120,15 @@ jobs:
             name: 'Release ${{ env.NEW_VERSION }}',
             body: `## 🚀 Release ${{ env.NEW_VERSION }}
           
-          Published to NPM: \`npm install -g @gitplus/mcp@${{ env.NEW_VERSION }}\`
+          Published to NPM: \`npm install -g @neublink/gitplus@${{ env.NEW_VERSION }}\`
           
           ### Installation
           \`\`\`bash
           # Install as MCP server in Claude Code
-          claude mcp add gitplus -- npx @gitplus/mcp@${{ env.NEW_VERSION }}
+          claude mcp add gitplus -- npx @neublink/gitplus@${{ env.NEW_VERSION }}
           
           # Or install CLI globally
-          npm install -g @gitplus/mcp@${{ env.NEW_VERSION }}
+          npm install -g @neublink/gitplus@${{ env.NEW_VERSION }}
           \`\`\`
           
           ### Changes
@@ -147,7 +147,7 @@ jobs:
       run: |
         echo "Waiting for NPM package propagation..."
         for i in {1..6}; do
-          if npm view @gitplus/mcp@latest version 2>/dev/null; then
+          if npm view @neublink/gitplus@latest version 2>/dev/null; then
             echo "Package is available on NPM"
             break
           fi
@@ -158,7 +158,7 @@ jobs:
     - name: Test NPM installation
       run: |
         # Test global CLI installation
-        npm install -g @gitplus/mcp@latest
+        npm install -g @neublink/gitplus@latest
         
         # Test CLI commands
         gitplus --version

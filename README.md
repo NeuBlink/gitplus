@@ -24,7 +24,7 @@ Gitplus is a Model Context Protocol (MCP) server that brings AI-powered git auto
 Install gitplus as an MCP server in Claude Code:
 
 ```bash
-claude mcp add gitplus -- npx gitplus-mcp@latest
+claude mcp add gitplus -- npx @neublink/gitplus@latest
 ```
 
 ### Local Development Installation
@@ -68,7 +68,7 @@ chmod +x dist/cli.js dist/index.js
 npm link
 
 # Add to Claude Code as MCP server (using linked command)
-claude mcp add gitplus-local -- gitplus-mcp
+claude mcp add gitplus-local -- node $(pwd)/dist/index.js
 ```
 
 **Note**: The `gp` alias may conflict with existing shell aliases for `git push`. Use the `gitplus` command if `gp` doesn't work.
