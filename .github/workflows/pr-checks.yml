@@ -57,6 +57,14 @@ jobs:
           exit 1
         fi
         
+        # Check if this version would conflict with existing NPM releases
+        if npm view @neublink/gitplus@$VERSION version 2>/dev/null; then
+          echo "⚠️ Warning: Version $VERSION already exists on NPM"
+          echo "You may need to bump the version before publishing"
+        else
+          echo "✅ Version $VERSION is available for publishing"
+        fi
+        
     - name: Check documentation
       run: |
         # Ensure README has been updated for significant changes
