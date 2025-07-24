@@ -706,8 +706,13 @@ class ContextCollector {
     try {
       let analysis = `=== DEPENDENCY CHANGES ===\n\n`;
       
-      // Check if package.json changed
-      const packageDiff = this.safeExecSync(`git diff ${this.baseSha}..${this.headSha} -- package.json 2>/dev/null || echo "No package.json changes"`);
+      // Check if package.json changed  
+      let packageDiff;
+      try {
+        packageDiff = this.safeExecSync('git', ['diff', `${this.baseSha}..${this.headSha}`, '--', 'package.json']);
+      } catch (error) {
+        packageDiff = 'No package.json changes';
+      }
       
       if (packageDiff.includes('No package.json changes')) {
         analysis += `No dependency changes detected\n`;
@@ -738,7 +743,7 @@ class ContextCollector {
       
       // Check package-lock.json changes
       try {
-        const lockDiff = this.safeExecSync(`git diff --stat ${this.baseSha}..${this.headSha} -- package-lock.json`);
+        const lockDiff = this.safeExecSync('git', ['diff', '--stat', `${this.baseSha}..${this.headSha}`, '--', 'package-lock.json']);
         if (lockDiff.trim()) {
           analysis += `Package-lock.json changed:\n${lockDiff}\n`;
         }
