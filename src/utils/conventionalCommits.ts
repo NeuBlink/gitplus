@@ -47,7 +47,8 @@ export function validateConventionalCommit(message: string): ValidationResult {
 
   // Parse conventional commit format: <type>[optional scope]: <description>
   // According to specification: type(scope)!: description OR type!: description OR type(scope): description OR type: description
-  const conventionalPattern = /^([a-z]+)(\([a-z0-9\-]+\))?(!)?: (.+)$/;
+  // Allow broader scope patterns so we can provide specific validation warnings
+  const conventionalPattern = /^([a-zA-Z]+)(\([^)]+\))?(!)?: (.+)$/;
   const match = message.match(conventionalPattern);
   
   if (!match) {
@@ -62,14 +63,24 @@ export function validateConventionalCommit(message: string): ValidationResult {
   const scope = scopeMatch ? scopeMatch.slice(1, -1) : undefined; // Remove parentheses
   
   // Validate type
-  if (!(type as ConventionalCommitType) || !COMMIT_TYPES[type as ConventionalCommitType]) {
-    errors.push(`Invalid commit type "${type}". Valid types: ${Object.keys(COMMIT_TYPES).join(', ')}`);
+  if (!type) {
+    errors.push('Commit type is required');
+  } else {
+    const lowerType = type.toLowerCase();
+    if (!COMMIT_TYPES[lowerType as ConventionalCommitType]) {
+      errors.push(`Invalid commit type "${type}". Valid types: ${Object.keys(COMMIT_TYPES).join(', ')}`);
+    }
+    
+    // Check if type is lowercase
+    if (type !== lowerType) {
+      warnings.push('Commit type should be lowercase');
+    }
   }
   
   // Validate scope format (if present)
   if (scope) {
     if (scope.includes(' ')) {
-      errors.push('Scope should not contain spaces, use kebab-case');
+      warnings.push('Scope should not contain spaces, use kebab-case');
     }
     if (scope !== scope.toLowerCase()) {
       warnings.push('Scope should be lowercase');
@@ -101,7 +112,7 @@ export function validateConventionalCommit(message: string): ValidationResult {
   }
 
   const parts: ConventionalCommitParts = {
-    type: type as ConventionalCommitType,
+    type: (type ? type.toLowerCase() : 'chore') as ConventionalCommitType,
     scope,
     breaking: !!breaking,
     description: (description || '').trim()
