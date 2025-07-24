@@ -72,27 +72,15 @@ jobs:
 
       - name: Set merge decision status
         run: |
-          echo "🔍 DEBUG: Claude response length: ${#claude_response}"
-          echo "🔍 DEBUG: Claude response (first 500 chars):"
-          echo "$claude_response" | head -c 500
-          echo ""
-          echo "🔍 DEBUG: Looking for decision patterns..."
-          
-          if echo "$claude_response" | grep -q "Merge Decision: PASS\|AI Merge Decision: PASS"; then
+          if echo "$claude_response" | grep -iq "merge decision:.*pass"; then
             echo "MERGE_DECISION=pass" >> $GITHUB_ENV
             echo "✅ Merge Decision: PASS"
-          elif echo "$claude_response" | grep -q "Merge Decision: FAIL\|AI Merge Decision: FAIL"; then
+          elif echo "$claude_response" | grep -iq "merge decision:.*fail"; then
             echo "MERGE_DECISION=fail" >> $GITHUB_ENV
             echo "❌ Merge Decision: FAIL"
             exit 1
-          elif [ -z "$claude_response" ]; then
-            echo "⚠️ Claude response is empty"
-            echo "MERGE_DECISION=fail" >> $GITHUB_ENV
-            exit 1
           else
             echo "⚠️ Could not determine merge decision from response"
-            echo "🔍 DEBUG: Response content:"
-            echo "$claude_response"
             echo "MERGE_DECISION=fail" >> $GITHUB_ENV
             exit 1
           fi
