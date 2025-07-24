@@ -1,4 +1,4 @@
-name: AI Merge Decider
+name: Merge Decider
 
 on:
   pull_request:
@@ -36,7 +36,7 @@ jobs:
           direct_prompt: |
             # AI Merge Decision Analysis
             
-            You are an AI merge decider for the gitplus repository. Analyze this PR and make a **PASS/FAIL decision** based on:
+            You are a merge decider for the gitplus repository. Analyze this PR and make a **PASS/FAIL decision** based on:
             
             1. **Claude Code review findings** (if available)
             2. **CI/CD results** 
@@ -50,7 +50,7 @@ jobs:
             ## Required Output Format
             
             ```
-            ## 🤖 AI Merge Decision: [PASS/FAIL]
+            ## 🤖 Merge Decision: [PASS/FAIL]
             
             **Target Branch:** ${{ github.event.pull_request.base.ref }}
             **PR Author:** ${{ github.event.pull_request.user.login }}
@@ -67,15 +67,15 @@ jobs:
 
       - name: Set merge decision status
         run: |
-          if echo "${{ steps.merge-decision.outputs.claude_response }}" | grep -q "AI Merge Decision: PASS"; then
+          if echo "${{ steps.merge-decision.outputs.claude_response }}" | grep -q "Merge Decision: PASS"; then
             echo "MERGE_DECISION=pass" >> $GITHUB_ENV
-            echo "✅ AI Merge Decision: PASS"
-          elif echo "${{ steps.merge-decision.outputs.claude_response }}" | grep -q "AI Merge Decision: FAIL"; then
+            echo "✅ Merge Decision: PASS"
+          elif echo "${{ steps.merge-decision.outputs.claude_response }}" | grep -q "Merge Decision: FAIL"; then
             echo "MERGE_DECISION=fail" >> $GITHUB_ENV
-            echo "❌ AI Merge Decision: FAIL"
+            echo "❌ Merge Decision: FAIL"
             exit 1
           else
-            echo "⚠️ Could not determine merge decision from AI response"
+            echo "⚠️ Could not determine merge decision from response"
             echo "MERGE_DECISION=fail" >> $GITHUB_ENV
             exit 1
           fi
@@ -88,11 +88,11 @@ jobs:
       - name: Merge Decision Summary
         run: |
           if [ "${{ needs.ai-merge-decision.result }}" = "success" ]; then
-            echo "✅ AI Merge Decision: APPROVED"
-            echo "This PR has been approved by the AI merge decider and is ready to merge."
+            echo "✅ Merge Decision: APPROVED"
+            echo "This PR has been approved by the merge decider and is ready to merge."
           else
-            echo "❌ AI Merge Decision: REJECTED"  
-            echo "This PR has been rejected by the AI merge decider."
-            echo "Please check the AI analysis comment for detailed feedback."
+            echo "❌ Merge Decision: REJECTED"  
+            echo "This PR has been rejected by the merge decider."
+            echo "Please check the analysis comment for detailed feedback."
             exit 1
           fi
