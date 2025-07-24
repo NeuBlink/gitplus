@@ -18,18 +18,19 @@ export interface ValidationResult {
 }
 
 /**
- * Conventional commit types with their purposes
+ * Conventional commit types as per specification
+ * Based on https://www.conventionalcommits.org/en/v1.0.0/#specification
  */
 export const COMMIT_TYPES: Record<ConventionalCommitType, string> = {
-  feat: 'A new feature for users',
-  fix: 'A bug fix for users',
+  feat: 'A new feature (correlates with MINOR in semantic versioning)',
+  fix: 'A bug fix (correlates with PATCH in semantic versioning)',
   docs: 'Documentation only changes',
-  style: 'Changes that do not affect the meaning of code (formatting, etc)',
+  style: 'Changes that do not affect the meaning of the code (white-space, formatting, missing semi-colons, etc)',
   refactor: 'A code change that neither fixes a bug nor adds a feature',
   perf: 'A code change that improves performance',
   test: 'Adding missing tests or correcting existing tests',
-  build: 'Changes affecting build system or external dependencies',
-  ci: 'Changes to CI configuration files and scripts',
+  build: 'Changes that affect the build system or external dependencies (example scopes: gulp, broccoli, npm)',
+  ci: 'Changes to our CI configuration files and scripts (example scopes: Travis, Circle, BrowserStack, SauceLabs)',
   chore: 'Other changes that don\'t modify src or test files'
 };
 
@@ -44,14 +45,15 @@ export function validateConventionalCommit(message: string): ValidationResult {
     return { valid: false, errors: ['Commit message is empty'], warnings: [] };
   }
 
-  // Parse conventional commit format: type(scope)!: description
-  const conventionalPattern = /^(\w+)(\([^)]+\))?(!)?: (.+)$/;
+  // Parse conventional commit format: <type>[optional scope]: <description>
+  // According to specification: type(scope)!: description OR type!: description OR type(scope): description OR type: description
+  const conventionalPattern = /^([a-z]+)(\([a-z0-9\-]+\))?(!)?: (.+)$/;
   const match = message.match(conventionalPattern);
   
   if (!match) {
     return {
       valid: false,
-      errors: ['Message does not follow conventional commit format: type(scope): description'],
+      errors: ['Message does not follow conventional commit format: <type>[optional scope]: <description>'],
       warnings: []
     };
   }
@@ -74,10 +76,11 @@ export function validateConventionalCommit(message: string): ValidationResult {
     }
   }
   
-  // Validate description
+  // Validate description according to conventional commits specification
   if (!description || description.trim().length === 0) {
     errors.push('Description is required');
   } else {
+    // Specification recommends keeping the first line under 50 characters
     if (description.length > 50) {
       warnings.push('Description should be under 50 characters for better readability');
     }
