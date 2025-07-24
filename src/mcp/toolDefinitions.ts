@@ -96,6 +96,76 @@ export const toolDefinitions = [
       confirm: z.boolean().describe('User confirmation to proceed with merge')
     },
   },
+  {
+    name: 'sync',
+    title: 'Repository Sync',
+    description: 'Synchronize with remote repository using fetch/pull with intelligent conflict handling',
+    inputSchema: {
+      repoPath: z.string().describe('Full absolute path to the git repository'),
+      strategy: z.enum(['merge', 'rebase', 'fetch-only']).optional().describe('Synchronization strategy (default: merge)'),
+      remote: z.string().optional().describe('Remote name (default: origin)'),
+      branch: z.string().optional().describe('Branch to sync (default: current branch)'),
+      autoResolve: z.enum(['ours', 'theirs', 'manual']).optional().describe('Automatic conflict resolution strategy'),
+      force: z.boolean().optional().describe('Force synchronization (use with caution)')
+    },
+  },
+  {
+    name: 'stash',
+    title: 'Git Stash Manager',
+    description: 'Manage git stash for temporary storage of changes',
+    inputSchema: {
+      repoPath: z.string().describe('Full absolute path to the git repository'),
+      action: z.enum(['push', 'pop', 'apply', 'drop', 'list']).describe('Stash action to perform'),
+      message: z.string().optional().describe('Stash message (for push action)'),
+      includeUntracked: z.boolean().optional().describe('Include untracked files in stash'),
+      stashIndex: z.number().optional().describe('Stash index for pop/apply/drop actions')
+    },
+  },
+  {
+    name: 'reset',
+    title: 'Git Reset',
+    description: 'Reset repository state to undo changes with different modes',
+    inputSchema: {
+      repoPath: z.string().describe('Full absolute path to the git repository'),
+      mode: z.enum(['soft', 'mixed', 'hard']).describe('Reset mode (soft=keep staged, mixed=unstage, hard=discard)'),
+      target: z.string().optional().describe('Target commit/branch to reset to (default: HEAD)'),
+      files: z.array(z.string()).optional().describe('Specific files to reset (optional)'),
+      confirm: z.boolean().optional().describe('Confirmation for destructive operations')
+    },
+  },
+  {
+    name: 'rebase',
+    title: 'Git Rebase',
+    description: 'Rebase current branch onto another branch with conflict handling',
+    inputSchema: {
+      repoPath: z.string().describe('Full absolute path to the git repository'),
+      onto: z.string().optional().describe('Branch to rebase onto'),
+      interactive: z.boolean().optional().describe('Start interactive rebase'),
+      action: z.enum(['start', 'continue', 'abort', 'skip']).optional().describe('Rebase action (default: start)'),
+      autoResolve: z.enum(['ours', 'theirs', 'manual']).optional().describe('Automatic conflict resolution strategy')
+    },
+  },
+  {
+    name: 'recover',
+    title: 'Git Recovery',
+    description: 'Recover lost commits or changes using reflog and advanced git recovery',
+    inputSchema: {
+      repoPath: z.string().describe('Full absolute path to the git repository'),
+      action: z.enum(['show-reflog', 'recover-commit', 'show-lost']).describe('Recovery action to perform'),
+      commitHash: z.string().optional().describe('Commit hash to recover (for recover-commit action)'),
+      limit: z.number().optional().describe('Number of reflog entries to show (default: 20)')
+    },
+  },
+  {
+    name: 'validate',
+    title: 'Repository Validator',
+    description: 'Validate repository integrity, health, and detect issues',
+    inputSchema: {
+      repoPath: z.string().describe('Full absolute path to the git repository'),
+      deep: z.boolean().optional().describe('Perform deep validation including remote connectivity'),
+      fix: z.boolean().optional().describe('Attempt to fix issues automatically')
+    },
+  },
 ] as const;
 
 export type ToolName = typeof toolDefinitions[number]['name'];
@@ -108,3 +178,9 @@ export type SuggestToolInput = z.infer<z.ZodObject<typeof toolDefinitions[3]['in
 export type PRDraftToolInput = z.infer<z.ZodObject<typeof toolDefinitions[4]['inputSchema']>>;
 export type StatusToolInput = z.infer<z.ZodObject<typeof toolDefinitions[5]['inputSchema']>>;
 export type MergeLocalToolInput = z.infer<z.ZodObject<typeof toolDefinitions[6]['inputSchema']>>;
+export type SyncToolInput = z.infer<z.ZodObject<typeof toolDefinitions[7]['inputSchema']>>;
+export type StashToolInput = z.infer<z.ZodObject<typeof toolDefinitions[8]['inputSchema']>>;
+export type ResetToolInput = z.infer<z.ZodObject<typeof toolDefinitions[9]['inputSchema']>>;
+export type RebaseToolInput = z.infer<z.ZodObject<typeof toolDefinitions[10]['inputSchema']>>;
+export type RecoverToolInput = z.infer<z.ZodObject<typeof toolDefinitions[11]['inputSchema']>>;
+export type ValidateToolInput = z.infer<z.ZodObject<typeof toolDefinitions[12]['inputSchema']>>;

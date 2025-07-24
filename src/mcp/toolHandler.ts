@@ -139,13 +139,67 @@ export class ToolHandler {
       labels = [],
       autoMerge = false,
       force = false,
-      dryRun = false 
+      dryRun = false,
+      verbose = false
     } = args;
 
+    const steps: string[] = [];
+    let stashedChanges = false;
+
     try {
+
+      // Phase 1: Pre-ship validation and repository health check
+      steps.push('🔍 Performing pre-ship validation...');
+      
+      const validation = await gitClient.validateRepository();
+      if (!validation.isValid) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `❌ **Repository Validation Failed**\n\n**Issues:**\n${validation.issues.map(i => `• ${i}`).join('\n')}\n\n**Fix these issues before shipping.**`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Check for ongoing operations
+      const mergeInProgress = await gitClient.isMergeInProgress();
+      const rebaseInProgress = await gitClient.isRebaseInProgress();
+      
+      if (mergeInProgress || rebaseInProgress) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `⚠️ **Cannot Ship: Git Operation in Progress**\n\n${mergeInProgress ? 'Merge' : 'Rebase'} operation is currently in progress.\n\n**To resolve:**\n1. Complete the operation: \`git ${mergeInProgress ? 'merge --continue' : 'rebase --continue'}\`\n2. Or abort: \`git ${mergeInProgress ? 'merge --abort' : 'rebase --abort'}\`\n\nThen try shipping again.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
       const status = await gitClient.getStatus();
       const analyzer = new ChangeAnalyzer(gitClient);
       const analysis = await analyzer.analyzeChanges({ includeDiff: true });
+
+      // Handle uncommitted changes intelligently
+      if (status.unstaged.length > 0 || status.untracked.length > 0) {
+        if (status.staged.length > 0) {
+          // Mixed state - stash unstaged changes to avoid confusion
+          steps.push('📦 Stashing uncommitted changes to avoid mixed commits...');
+          await gitClient.stash({ 
+            message: `Auto-stash before ship: ${new Date().toISOString()}`,
+            includeUntracked: true 
+          });
+          stashedChanges = true;
+        } else {
+          // No staged changes - stage everything
+          await gitClient.add('all');
+          steps.push(`✅ Staged ${status.unstaged.length + status.untracked.length} files`);
+        }
+      }
 
       if (dryRun) {
         const commitMsg = message || analysis.commitMessage;
@@ -153,60 +207,215 @@ export class ToolHandler {
         const prTitle = analysis.title;
         const prDescription = analysis.description;
         
+        // Enhanced dry run with validation results
+        let dryRunText = `🚀 **Ship Preview**\n\n`;
+        dryRunText += `**🔍 Validation:** ${validation.isValid ? '✅ Passed' : '❌ Failed'}\n`;
+        if (validation.warnings.length > 0) {
+          dryRunText += `**⚠️ Warnings:** ${validation.warnings.length}\n`;
+        }
+        dryRunText += `**📝 Commit Message:**\n\`${commitMsg}\`\n\n`;
+        dryRunText += `**🌿 Branch Name:**\n\`${branchName}\`\n\n`;
+        dryRunText += `**📋 PR Title:**\n${prTitle}\n\n`;
+        dryRunText += `**📄 PR Description:**\n${prDescription.length > 200 ? prDescription.substring(0, 200) + '...' : prDescription}\n\n`;
+        dryRunText += `**⚡ Planned Actions:**\n${steps.join('\n')}\n`;
+        dryRunText += `• Commit with AI-generated message\n`;
+        dryRunText += `${noPush ? '• Skip push' : '• Sync and push to remote'}\n`;
+        dryRunText += `${noPR ? '• Skip PR creation' : `• Create ${draft ? 'draft ' : ''}PR`}`;
+        
         return {
           content: [
             {
               type: 'text',
-              text: `🚀 **Ship Preview**\n\n**📝 Commit Message:**\n\`${commitMsg}\`\n\n**🌿 Branch Name:**\n\`${branchName}\`\n\n**📋 PR Title:**\n${prTitle}\n\n**📄 PR Description:**\n${prDescription.length > 200 ? prDescription.substring(0, 200) + '...' : prDescription}\n\n**⚡ Actions:**\n${status.staged.length === 0 ? '• Stage all changes' : '• Use staged changes'}\n• Commit with AI-generated message\n${noPush ? '• Skip push' : '• Push to remote'}\n${noPR ? '• Skip PR creation' : `• Create ${draft ? 'draft ' : ''}PR`}`,
+              text: dryRunText,
             },
           ],
         };
       }
 
-      const steps: string[] = [];
-
-      // Step 1: Stage changes if needed
-      if (status.staged.length === 0 && (status.unstaged.length > 0 || status.untracked.length > 0)) {
-        await gitClient.add('all');
-        steps.push(`✅ Staged ${status.unstaged.length + status.untracked.length} files`);
-      }
-
-      // Step 2: Create branch if on main/master (always create branch for ship)
+      // Phase 2: Smart branch handling with conflict detection
       let targetBranch = branch;
+      const originalBranch = status.branch;
+      
       if (status.branch === 'main' || status.branch === 'master') {
         if (!targetBranch) {
-          // Use AI-generated branch name if no branch specified
           targetBranch = analysis.branchName;
         }
-        await gitClient.createBranch(targetBranch, true);
-        steps.push(`✅ Created and switched to branch: ${targetBranch}`);
+        
+        // Check if target branch already exists by trying to create it
+        try {
+          await gitClient.createBranch(targetBranch, true);
+          steps.push(`✅ Created and switched to branch: ${targetBranch}`);
+        } catch (branchError: any) {
+          if (branchError.message && branchError.message.includes('already exists')) {
+            // Branch exists - offer alternatives
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `⚠️ **Branch Already Exists**\n\nBranch "${targetBranch}" already exists locally.\n\n**Options:**\n1. Use a different name: Provide \`branch\` parameter\n2. Switch to existing branch: Use \`checkout\` command first\n3. Delete existing branch: Use \`reset\` tool with confirm=true\n\n**Suggested alternative:** \`${targetBranch}-${Date.now().toString().slice(-4)}\``,
+                },
+              ],
+              isError: true,
+            };
+          } else {
+            throw branchError; // Re-throw if it's a different error
+          }
+        }
+      } else {
+        targetBranch = status.branch;
       }
 
-      // Step 3: Commit changes
+      // Phase 3: Pre-commit sync validation (if pushing)
+      if (!noPush) {
+        steps.push('🔄 Checking sync status with remote...');
+        
+        try {
+          await gitClient.fetch({ prune: true });
+          const syncStatus = await gitClient.getSyncStatus(targetBranch);
+          
+          if (syncStatus.hasUpstream && (syncStatus.behind > 0 || syncStatus.diverged)) {
+            steps.push(`⚠️ Branch is ${syncStatus.behind} commits behind remote`);
+            
+            if (!force) {
+              // Attempt automatic sync
+              steps.push('🔄 Attempting to sync with remote...');
+              const pullResult = await gitClient.pull({
+                strategy: 'merge',
+                remote: 'origin',
+                branch: targetBranch
+              });
+              
+              if (!pullResult.success && pullResult.conflicts) {
+                // Auto-resolve conflicts if possible
+                steps.push(`⚠️ Conflicts detected in ${pullResult.conflicts.length} files`);
+                
+                const resolveResult = await gitClient.resolveConflicts('ours');
+                if (resolveResult.success) {
+                  await gitClient.continueMerge();
+                  steps.push(`✅ Auto-resolved conflicts using 'ours' strategy`);
+                } else {
+                  return {
+                    content: [
+                      {
+                        type: 'text',
+                        text: `⚠️ **Manual Conflict Resolution Required**\n\n${steps.join('\n')}\n\n**Conflicted Files:**\n${pullResult.conflicts.map(f => `• ${f}`).join('\n')}\n\n**To resolve:**\n1. Edit the conflicted files\n2. Stage resolved files: \`git add <files>\`\n3. Continue merge: \`git merge --continue\`\n4. Run ship again\n\n**Or use force=true to override (⚠️ may lose remote changes)**`,
+                      },
+                    ],
+                    isError: true,
+                  };
+                }
+              } else if (pullResult.success) {
+                steps.push('✅ Successfully synced with remote');
+              }
+            } else {
+              steps.push('⚠️ Force push enabled - skipping sync check');
+            }
+          } else if (syncStatus.hasUpstream) {
+            steps.push('✅ Branch is up-to-date with remote');
+          } else {
+            steps.push('ℹ️ New branch - will set upstream on push');
+          }
+        } catch (syncError) {
+          if (!force) {
+            steps.push('⚠️ Unable to check remote status - proceeding with caution');
+          }
+        }
+      }
+
+      // Phase 4: Create commit
       const commitMessage = message || analysis.commitMessage;
       await gitClient.commit(commitMessage);
       steps.push(`✅ Created commit: ${commitMessage}`);
 
-      // Step 4: Handle push and PR/merge logic
+      // Phase 5: Enhanced push logic with comprehensive error handling
       let prInfo = '';
       const currentBranch = await gitClient.getCurrentBranch();
       const updatedStatus = await gitClient.getStatus();
 
       if (!noPush) {
-        try {
-          await gitClient.push({ 
-            branch: currentBranch, 
-            force, 
-            setUpstream: true 
-          });
-          steps.push(`✅ Pushed to remote: ${currentBranch}`);
+        let pushSuccess = false;
+        let pushAttempts = 0;
+        const maxPushAttempts = 3;
 
-          // Step 5: Create PR if not disabled and platform supports it
-          if (!noPR) {
-            const platformManager = new PlatformManager(updatedStatus.platform, updatedStatus.remoteURL);
-            const capabilities = await platformManager.getCapabilities();
+        while (!pushSuccess && pushAttempts < maxPushAttempts) {
+          pushAttempts++;
+          
+          try {
+            await gitClient.push({ 
+              branch: currentBranch, 
+              force: force && pushAttempts > 1, 
+              setUpstream: true 
+            });
+            pushSuccess = true;
+            steps.push(`✅ Pushed to remote: ${currentBranch}`);
 
-            if (capabilities.canCreatePR) {
+          } catch (pushError: any) {
+            steps.push(`⚠️ Push attempt ${pushAttempts} failed`);
+            
+            if (pushError.message && pushError.message.includes('non-fast-forward')) {
+              if (pushAttempts < maxPushAttempts && !force) {
+                steps.push('🔄 Retrying with sync...');
+                try {
+                  const pullResult = await gitClient.pull({ strategy: 'rebase' });
+                  if (!pullResult.success && pullResult.conflicts) {
+                    const resolveResult = await gitClient.resolveConflicts('ours');
+                    if (resolveResult.success) {
+                      await gitClient.rebase({ onto: '', continue: true });
+                      steps.push('✅ Resolved conflicts and rebased');
+                    } else {
+                      break; // Exit retry loop for manual resolution
+                    }
+                  }
+                  continue; // Retry push
+                } catch {
+                  break; // Exit retry loop
+                }
+              }
+            } else if (pushError.message && pushError.message.includes('remote: ')) {
+              // Remote rejected push (protected branch, etc.)
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: `❌ **Push Rejected by Remote**\n\n${steps.join('\n')}\n\n**Error:** ${pushError.message}\n\n**This usually means:**\n• Branch is protected\n• Insufficient permissions\n• Remote repository policies\n\n**Solutions:**\n1. Use a different branch name\n2. Contact repository administrator\n3. Use fork workflow if available`,
+                  },
+                ],
+                isError: true,
+              };
+            } else if (pushAttempts >= maxPushAttempts) {
+              // No remote or other push failure after retries
+              if (updatedStatus.remoteURL) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `❌ **Push Failed After ${maxPushAttempts} Attempts**\n\n${steps.join('\n')}\n\n**Final Error:** ${pushError.message}\n\n**Options:**\n1. Check network connection\n2. Verify remote repository access\n3. Try manual push: \`git push -u origin ${currentBranch}\`\n4. Use local merge workflow instead`,
+                    },
+                  ],
+                  isError: true,
+                };
+              } else {
+                // No remote - offer local merge
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `🤔 **No Remote Repository**\n\n${steps.join('\n')}\n\nCannot push branch "${currentBranch}" - no remote configured.\n\n**Options:**\n1. Add remote: \`git remote add origin <url>\`\n2. **Merge locally into ${originalBranch}**\n\n**Local merge will:**\n• Switch to ${originalBranch} branch\n• Merge your changes\n• Delete feature branch\n• Keep work local\n\n**Proceed with local merge?**`,
+                    },
+                  ],
+                };
+              }
+            }
+          }
+        }
+
+        // Phase 6: PR creation with enhanced error handling
+        if (pushSuccess && !noPR) {
+          const platformManager = new PlatformManager(updatedStatus.platform, updatedStatus.remoteURL);
+          const capabilities = await platformManager.getCapabilities();
+
+          if (capabilities.canCreatePR) {
+            try {
               const prRequest = {
                 title: analysis.title,
                 body: analysis.description,
@@ -225,52 +434,52 @@ export class ToolHandler {
               } else {
                 steps.push(`⚠️ PR creation failed: ${prResponse.message}`);
               }
-            } else {
-              const terminology = platformManager.getPRTerminology();
-              steps.push(`ℹ️ ${terminology.singular} creation not available: Platform CLI not installed or authenticated`);
+            } catch (prError) {
+              steps.push(`⚠️ PR creation error - may need manual creation`);
+              if (verbose) {
+                steps.push(`Debug: ${prError}`);
+              }
             }
-          }
-        } catch (pushError) {
-          // Handle no remote case - offer local merge
-          if (!noPR && (status.branch === 'main' || status.branch === 'master')) {
-            // Don't offer merge if we never created a branch
-            steps.push(`⚠️ No remote repository found. Cannot push changes.`);
-            steps.push(`ℹ️ Consider adding a remote: git remote add origin <url>`);
           } else {
-            // We're on a feature branch and can't push - offer local merge
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: `🤔 **No Remote Repository Found**\n\nCannot push branch "${currentBranch}" to remote.\n\n**Options:**\n1. Add a remote repository: \`git remote add origin <url>\`\n2. Merge locally into main branch\n\n**Would you like to merge "${currentBranch}" into main locally?**\n\n⚠️ This will:\n- Switch to main branch\n- Merge your feature branch\n- Delete the feature branch\n\n*Reply with "yes" to proceed with local merge, or "no" to keep the feature branch.*`,
-                },
-              ],
-            };
+            const terminology = platformManager.getPRTerminology();
+            steps.push(`ℹ️ ${terminology.singular} creation not available: Platform CLI not installed or authenticated`);
           }
         }
-      } else if (!noPR && currentBranch !== 'main' && currentBranch !== 'master') {
-        // User wants PR but no push - offer local merge since we can't create remote PR
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `🤔 **Local Branch Created**\n\nBranch "${currentBranch}" created with your changes, but push was skipped.\n\n**Options:**\n1. Push later: \`git push -u origin ${currentBranch}\`\n2. Merge locally into main branch\n\n**Would you like to merge "${currentBranch}" into main locally?**\n\n⚠️ This will:\n- Switch to main branch\n- Merge your feature branch\n- Delete the feature branch\n\n*Reply with "yes" to proceed with local merge, or "no" to keep the feature branch.*`,
-          },
-          ],
-        };
       }
 
+      // Phase 7: Restore stashed changes if any
+      if (stashedChanges) {
+        try {
+          await gitClient.stash({ pop: true });
+          steps.push('✅ Restored previously stashed changes');
+        } catch (stashError) {
+          steps.push('⚠️ Could not restore stashed changes - check stash list');
+        }
+      }
+
+      // Final success message
       return {
         content: [
           {
             type: 'text',
-            text: `🚀 **Ship Complete!**\n\n${steps.join('\n')}\n\n📊 **Summary:**\n- ${analysis.additions} additions, ${analysis.deletions} deletions\n- ${analysis.filesChanged.length} files changed\n- Change type: ${analysis.changeType}${prInfo}`,
+            text: `🚀 **Ship Complete!**\n\n${steps.join('\n')}\n\n📊 **Summary:**\n• ${analysis.additions} additions, ${analysis.deletions} deletions\n• ${analysis.filesChanged.length} files changed\n• Change type: ${analysis.changeType}\n• Branch: ${currentBranch}${prInfo}`,
           },
         ],
       };
 
     } catch (error) {
-      throw new Error(`Ship failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Enhanced error handling with recovery suggestions
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `❌ **Ship Failed**\n\n**Error:** ${errorMessage}\n\n**Recovery Steps:**\n1. Check repository status: Use \`status\` tool\n2. Validate repository: Use \`validate\` tool\n3. Check for conflicts: Use \`sync\` tool\n4. Manual recovery: Use \`recover\` tool if needed\n\n**Debug Info:**\n• Steps completed: ${steps.length}\n• Use verbose=true for more details`,
+          },
+        ],
+        isError: true,
+      };
     }
   }
 
@@ -671,6 +880,489 @@ export class ToolHandler {
       }
 
       throw new Error(`Local merge failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Handle repository synchronization
+   */
+  async handleSync(args: any): Promise<ToolResult> {
+    const repoPath = args.repoPath as string;
+    const strategy = (args.strategy as string) || 'merge';
+    const remote = (args.remote as string) || 'origin';
+    const branch = args.branch as string;
+    const autoResolve = args.autoResolve as 'ours' | 'theirs' | 'manual';
+    const force = args.force as boolean;
+
+    const client = new GitClient(repoPath);
+
+    try {
+      // First, check sync status
+      const syncStatus = await client.getSyncStatus(branch);
+      const steps: string[] = [];
+
+      if (!syncStatus.hasUpstream) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `⚠️ **No Upstream Branch**\n\nBranch "${syncStatus.localBranch}" has no upstream branch.\n\n**To set upstream:**\n\`git push -u ${remote} ${syncStatus.localBranch}\``,
+            },
+          ],
+        };
+      }
+
+      if (syncStatus.upToDate) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `✅ **Already Up to Date**\n\nBranch "${syncStatus.localBranch}" is already up to date with ${syncStatus.remoteBranch}.`,
+            },
+          ],
+        };
+      }
+
+      // Fetch first
+      steps.push('🔄 Fetching updates from remote...');
+      await client.fetch({ remote, prune: true });
+
+      if (strategy === 'fetch-only') {
+        const newSyncStatus = await client.getSyncStatus(branch);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `📥 **Fetch Complete**\n\n${steps.join('\n')}\n\n📊 **Status:**\n- Ahead: ${newSyncStatus.ahead} commits\n- Behind: ${newSyncStatus.behind} commits\n- Diverged: ${newSyncStatus.diverged ? 'Yes' : 'No'}\n\n💡 Use sync with 'merge' or 'rebase' strategy to integrate changes.`,
+            },
+          ],
+        };
+      }
+
+      // Handle pull with conflict resolution
+      if (syncStatus.needsPull) {
+        steps.push(`📥 Pulling changes using ${strategy} strategy...`);
+        
+        const pullResult = await client.pull({
+          remote,
+          branch,
+          strategy: strategy as 'merge' | 'rebase'
+        });
+
+        if (!pullResult.success && pullResult.conflicts) {
+          steps.push(`⚠️ Conflicts detected in ${pullResult.conflicts.length} files`);
+          
+          if (autoResolve && autoResolve !== 'manual') {
+            steps.push(`🔧 Auto-resolving conflicts using '${autoResolve}' strategy...`);
+            const resolveResult = await client.resolveConflicts(autoResolve);
+            
+            if (resolveResult.success) {
+              steps.push(`✅ Resolved ${resolveResult.resolvedFiles.length} conflicts`);
+              if (strategy === 'merge') {
+                await client.continueMerge();
+              } else if (strategy === 'rebase') {
+                await client.rebase({ onto: '', continue: true });
+              }
+            } else {
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: `⚠️ **Conflicts Need Manual Resolution**\n\n${steps.join('\n')}\n\n**Conflicted Files:**\n${resolveResult.remainingConflicts.map(f => `- ${f}`).join('\n')}\n\n**To resolve:**\n1. Edit the conflicted files\n2. Stage resolved files: \`git add <files>\`\n3. Continue: \`git ${strategy === 'merge' ? 'merge --continue' : 'rebase --continue'}\``,
+                  },
+                ],
+                isError: true,
+              };
+            }
+          } else {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `⚠️ **Manual Conflict Resolution Required**\n\n${steps.join('\n')}\n\n**Conflicted Files:**\n${pullResult.conflicts.map(f => `- ${f}`).join('\n')}\n\n**To resolve:**\n1. Edit the conflicted files\n2. Stage resolved files: \`git add <files>\`\n3. Continue: \`git ${strategy === 'merge' ? 'merge --continue' : 'rebase --continue'}\``,
+                },
+              ],
+              isError: true,
+            };
+          }
+        }
+      }
+
+      steps.push('✅ Synchronization complete');
+      const finalStatus = await client.getSyncStatus(branch);
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `🎉 **Sync Complete!**\n\n${steps.join('\n')}\n\n📊 **Final Status:**\n- Branch: ${finalStatus.localBranch}\n- Up to date: ${finalStatus.upToDate ? 'Yes' : 'No'}\n- Ahead: ${finalStatus.ahead} commits\n- Behind: ${finalStatus.behind} commits`,
+          },
+        ],
+      };
+
+    } catch (error) {
+      throw new Error(`Sync failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Handle git stash operations
+   */
+  async handleStash(args: any): Promise<ToolResult> {
+    const repoPath = args.repoPath as string;
+    const action = args.action as 'push' | 'pop' | 'apply' | 'drop' | 'list';
+    const message = args.message as string;
+    const includeUntracked = args.includeUntracked as boolean;
+    const stashIndex = args.stashIndex as number;
+
+    const client = new GitClient(repoPath);
+
+    try {
+      let output: string;
+      let resultText: string;
+
+      switch (action) {
+        case 'list':
+          output = await client.stash({ list: true });
+          const stashes = output.split('\n').filter(line => line.trim());
+          resultText = stashes.length > 0 
+            ? `📋 **Git Stash List**\n\n${stashes.map((stash, i) => `${i}: ${stash}`).join('\n')}`
+            : '📋 **Git Stash List**\n\nNo stashes found.';
+          break;
+
+        case 'push':
+          output = await client.stash({ 
+            message, 
+            includeUntracked 
+          });
+          resultText = `💾 **Stash Created**\n\n${message ? `Message: ${message}` : 'Stashed current changes'}\n${includeUntracked ? 'Included untracked files' : 'Tracked files only'}`;
+          break;
+
+        case 'pop':
+          output = await client.stash({ 
+            pop: true, 
+            stashIndex 
+          });
+          resultText = `📤 **Stash Applied & Removed**\n\n${stashIndex !== undefined ? `Applied stash@{${stashIndex}}` : 'Applied latest stash'}\n\nChanges restored to working directory.`;
+          break;
+
+        case 'apply':
+          output = await client.stash({ 
+            apply: true, 
+            stashIndex 
+          });
+          resultText = `📥 **Stash Applied**\n\n${stashIndex !== undefined ? `Applied stash@{${stashIndex}}` : 'Applied latest stash'}\n\nStash preserved for future use.`;
+          break;
+
+        case 'drop':
+          output = await client.stash({ 
+            drop: true, 
+            stashIndex 
+          });
+          resultText = `🗑️ **Stash Dropped**\n\n${stashIndex !== undefined ? `Dropped stash@{${stashIndex}}` : 'Dropped latest stash'}\n\nStash permanently removed.`;
+          break;
+
+        default:
+          throw new Error(`Unknown stash action: ${action}`);
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: resultText,
+          },
+        ],
+      };
+
+    } catch (error) {
+      throw new Error(`Stash operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Handle git reset operations
+   */
+  async handleReset(args: any): Promise<ToolResult> {
+    const repoPath = args.repoPath as string;
+    const mode = args.mode as 'soft' | 'mixed' | 'hard';
+    const target = (args.target as string) || 'HEAD';
+    const files = args.files as string[];
+    const confirm = args.confirm as boolean;
+
+    if (mode === 'hard' && !confirm) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `⚠️ **Destructive Operation Warning**\n\nHard reset will permanently discard all changes.\n\n**What will happen:**\n- All uncommitted changes will be lost\n- Working directory will match ${target}\n- This cannot be undone\n\n**To proceed, call reset again with confirm=true**`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const client = new GitClient(repoPath);
+
+    try {
+      await client.reset({ mode, target, files });
+
+      const descriptions = {
+        soft: 'Reset HEAD to target, keeping changes staged',
+        mixed: 'Reset HEAD and index, keeping changes in working directory', 
+        hard: 'Reset HEAD, index, and working directory (all changes discarded)'
+      };
+
+      const fileText = files && files.length > 0 
+        ? `\n\n📁 **Files Reset:**\n${files.map(f => `- ${f}`).join('\n')}`
+        : '';
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `🔄 **Reset Complete**\n\n**Mode:** ${mode}\n**Target:** ${target}\n**Action:** ${descriptions[mode]}${fileText}`,
+          },
+        ],
+      };
+
+    } catch (error) {
+      throw new Error(`Reset failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Handle git rebase operations
+   */
+  async handleRebase(args: any): Promise<ToolResult> {
+    const repoPath = args.repoPath as string;
+    const onto = args.onto as string;
+    const interactive = args.interactive as boolean;
+    const action = (args.action as string) || 'start';
+    const autoResolve = args.autoResolve as 'ours' | 'theirs' | 'manual';
+
+    const client = new GitClient(repoPath);
+
+    try {
+      let result: { success: boolean; output: string; conflicts?: string[] };
+      let resultText: string;
+
+      switch (action) {
+        case 'start':
+          if (!onto) {
+            throw new Error('Target branch (onto) is required for rebase');
+          }
+          result = await client.rebase({ onto, interactive });
+          
+          if (!result.success && result.conflicts) {
+            if (autoResolve && autoResolve !== 'manual') {
+              const resolveResult = await client.resolveConflicts(autoResolve);
+              if (resolveResult.success) {
+                await client.rebase({ onto: '', continue: true });
+                resultText = `🎉 **Rebase Complete**\n\nRebased onto ${onto} with auto-resolved conflicts using '${autoResolve}' strategy.`;
+              } else {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `⚠️ **Rebase Conflicts**\n\nConflicts in: ${result.conflicts.join(', ')}\n\n**To resolve:**\n1. Edit conflicted files\n2. Stage resolved files: \`git add <files>\`\n3. Continue: Use rebase tool with action='continue'`,
+                    },
+                  ],
+                  isError: true,
+                };
+              }
+            } else {
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: `⚠️ **Rebase Conflicts**\n\nConflicts in: ${result.conflicts.join(', ')}\n\n**To resolve:**\n1. Edit conflicted files\n2. Stage resolved files: \`git add <files>\`\n3. Continue: Use rebase tool with action='continue'`,
+                  },
+                ],
+                isError: true,
+              };
+            }
+          } else {
+            resultText = `🎉 **Rebase Complete**\n\nSuccessfully rebased onto ${onto}.`;
+          }
+          break;
+
+        case 'continue':
+          result = await client.rebase({ onto: '', continue: true });
+          resultText = `✅ **Rebase Continued**\n\nRebase operation continued successfully.`;
+          break;
+
+        case 'abort':
+          result = await client.rebase({ onto: '', abort: true });
+          resultText = `🚫 **Rebase Aborted**\n\nRebase operation aborted. Repository restored to pre-rebase state.`;
+          break;
+
+        case 'skip':
+          result = await client.rebase({ onto: '', skip: true });
+          resultText = `⏭️ **Commit Skipped**\n\nSkipped current commit and continued rebase.`;
+          break;
+
+        default:
+          throw new Error(`Unknown rebase action: ${action}`);
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: resultText,
+          },
+        ],
+      };
+
+    } catch (error) {
+      throw new Error(`Rebase failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Handle git recovery operations
+   */
+  async handleRecover(args: any): Promise<ToolResult> {
+    const repoPath = args.repoPath as string;
+    const action = args.action as 'show-reflog' | 'recover-commit' | 'show-lost';
+    const commitHash = args.commitHash as string;
+    const limit = (args.limit as number) || 20;
+
+    const client = new GitClient(repoPath);
+
+    try {
+      let resultText: string;
+
+      switch (action) {
+        case 'show-reflog':
+          const reflogEntries = await client.getReflog(limit);
+          if (reflogEntries.length === 0) {
+            resultText = '📜 **Reflog**\n\nNo reflog entries found.';
+          } else {
+            resultText = `📜 **Reflog (last ${limit} entries)**\n\n${reflogEntries.map((entry, i) => 
+              `${i}: ${entry.shortHash} ${entry.action}: ${entry.message}`
+            ).join('\n')}\n\n💡 Use 'recover-commit' action with commitHash to recover a specific commit.`;
+          }
+          break;
+
+        case 'recover-commit':
+          if (!commitHash) {
+            throw new Error('Commit hash is required for recovery');
+          }
+          
+          // Create a new branch pointing to the lost commit
+          const recoveryBranch = `recovery-${commitHash.substring(0, 8)}-${Date.now()}`;
+          await client.createBranch(recoveryBranch, false);
+          await client.reset({ mode: 'hard', target: commitHash });
+          
+          resultText = `🎉 **Commit Recovered**\n\nRecovered commit ${commitHash} to new branch: ${recoveryBranch}\n\n**Next steps:**\n- Review the recovered changes\n- Merge or cherry-pick to your main branch if needed\n- Delete recovery branch when done: \`git branch -d ${recoveryBranch}\``;
+          break;
+
+        case 'show-lost':
+          // Show commits that are not reachable from any branch
+          const reflog = await client.getReflog(50);
+          const lostCommits = reflog.filter(entry => 
+            entry.action.includes('commit') || entry.action.includes('reset')
+          ).slice(0, 10);
+          
+          if (lostCommits.length === 0) {
+            resultText = '🔍 **Lost Commits**\n\nNo potentially lost commits found in recent reflog.';
+          } else {
+            resultText = `🔍 **Potentially Lost Commits**\n\n${lostCommits.map((entry, i) => 
+              `${i + 1}. ${entry.shortHash} - ${entry.message}`
+            ).join('\n')}\n\n💡 Use 'recover-commit' with the hash to recover any of these commits.`;
+          }
+          break;
+
+        default:
+          throw new Error(`Unknown recovery action: ${action}`);
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: resultText,
+          },
+        ],
+      };
+
+    } catch (error) {
+      throw new Error(`Recovery operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Handle repository validation
+   */
+  async handleValidate(args: any): Promise<ToolResult> {
+    const repoPath = args.repoPath as string;
+    const deep = args.deep as boolean;
+    const fix = args.fix as boolean;
+
+    const client = new GitClient(repoPath);
+
+    try {
+      const validation = await client.validateRepository();
+      const stats = await client.getRepositoryStats();
+
+      let resultText = `🔍 **Repository Validation**\n\n`;
+      
+      if (validation.isValid) {
+        resultText += `✅ **Repository is healthy**\n\n`;
+      } else {
+        resultText += `❌ **Repository has issues**\n\n`;
+      }
+
+      // Show issues
+      if (validation.issues.length > 0) {
+        resultText += `**Issues Found:**\n${validation.issues.map(issue => `❌ ${issue}`).join('\n')}\n\n`;
+      }
+
+      // Show warnings
+      if (validation.warnings.length > 0) {
+        resultText += `**Warnings:**\n${validation.warnings.map(warning => `⚠️ ${warning}`).join('\n')}\n\n`;
+      }
+
+      // Show repository statistics
+      resultText += `📊 **Repository Statistics:**\n`;
+      resultText += `- Total commits: ${stats.totalCommits}\n`;
+      resultText += `- Total branches: ${stats.totalBranches}\n`;
+      resultText += `- Total tags: ${stats.totalTags}\n`;
+      resultText += `- Repository size: ${stats.repositorySize}\n`;
+      if (stats.lastCommitDate) {
+        resultText += `- Last commit: ${stats.lastCommitDate.toISOString().split('T')[0]}\n`;
+      }
+
+      // Show sync status if deep validation
+      if (deep) {
+        try {
+          const syncStatus = await client.getSyncStatus();
+          resultText += `\n🔄 **Sync Status:**\n`;
+          resultText += `- Current branch: ${syncStatus.localBranch}\n`;
+          resultText += `- Has upstream: ${syncStatus.hasUpstream ? 'Yes' : 'No'}\n`;
+          if (syncStatus.hasUpstream) {
+            resultText += `- Up to date: ${syncStatus.upToDate ? 'Yes' : 'No'}\n`;
+            resultText += `- Ahead: ${syncStatus.ahead} commits\n`;
+            resultText += `- Behind: ${syncStatus.behind} commits\n`;
+          }
+        } catch (error) {
+          resultText += `\n⚠️ Could not check sync status: ${error}\n`;
+        }
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: resultText,
+          },
+        ],
+      };
+
+    } catch (error) {
+      throw new Error(`Validation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 }

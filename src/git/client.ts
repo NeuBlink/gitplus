@@ -366,4 +366,588 @@ export class GitClient {
     const flag = force ? '-D' : '-d';
     await this.executeGitCommand(`branch ${flag} ${branchName}`);
   }
+
+  /**
+   * Fetch updates from remote repository
+   */
+  async fetch(options: {
+    remote?: string;
+    branch?: string;
+    all?: boolean;
+    prune?: boolean;
+  } = {}): Promise<string> {
+    const { remote = 'origin', branch, all = false, prune = false } = options;
+    
+    let command = 'fetch';
+    if (all) {
+      command += ' --all';
+    } else {
+      command += ` ${remote}`;
+      if (branch) {
+        command += ` ${branch}`;
+      }
+    }
+    
+    if (prune) {
+      command += ' --prune';
+    }
+    
+    return await this.executeGitCommand(command);
+  }
+
+  /**
+   * Pull changes from remote repository
+   */
+  async pull(options: {
+    remote?: string;
+    branch?: string;
+    rebase?: boolean;
+    fastForwardOnly?: boolean;
+    strategy?: 'merge' | 'rebase';
+  } = {}): Promise<{ success: boolean; output: string; conflicts?: string[] }> {
+    const { 
+      remote = 'origin', 
+      branch, 
+      rebase = false, 
+      fastForwardOnly = false,
+      strategy = 'merge'
+    } = options;
+    
+    let command = 'pull';
+    
+    if (strategy === 'rebase' || rebase) {
+      command += ' --rebase';
+    }
+    
+    if (fastForwardOnly) {
+      command += ' --ff-only';
+    }
+    
+    command += ` ${remote}`;
+    if (branch) {
+      command += ` ${branch}`;
+    }
+    
+    try {
+      const output = await this.executeGitCommand(command);
+      return { success: true, output };
+    } catch (error: any) {
+      // Handle merge conflicts
+      if (error.message && error.message.toLowerCase().includes('conflict')) {
+        const conflicts = await this.getConflictedFiles();
+        return { 
+          success: false, 
+          output: error.message, 
+          conflicts 
+        };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Get the synchronization status between local and remote branches
+   */
+  async getSyncStatus(branch?: string): Promise<{
+    localBranch: string;
+    remoteBranch: string;
+    ahead: number;
+    behind: number;
+    diverged: boolean;
+    upToDate: boolean;
+    needsPull: boolean;
+    needsPush: boolean;
+    hasUpstream: boolean;
+  }> {
+    const currentBranch = branch || await this.getCurrentBranch();
+    const remoteBranch = `origin/${currentBranch}`;
+    
+    try {
+      // Check if upstream exists
+      const upstreamCheck = await this.executeGitCommand(`rev-parse --verify ${remoteBranch}`);
+      const hasUpstream = !!upstreamCheck;
+      
+      if (!hasUpstream) {
+        return {
+          localBranch: currentBranch,
+          remoteBranch,
+          ahead: 0,
+          behind: 0,
+          diverged: false,
+          upToDate: false,
+          needsPull: false,
+          needsPush: false,
+          hasUpstream: false
+        };
+      }
+      
+      // Get ahead/behind counts
+      const { ahead, behind } = await this.getAheadBehind();
+      const diverged = ahead > 0 && behind > 0;
+      const upToDate = ahead === 0 && behind === 0;
+      const needsPull = behind > 0;
+      const needsPush = ahead > 0;
+      
+      return {
+        localBranch: currentBranch,
+        remoteBranch,
+        ahead,
+        behind,
+        diverged,
+        upToDate,
+        needsPull,
+        needsPush,
+        hasUpstream: true
+      };
+      
+    } catch (error) {
+      return {
+        localBranch: currentBranch,
+        remoteBranch,
+        ahead: 0,
+        behind: 0,
+        diverged: false,
+        upToDate: false,
+        needsPull: false,
+        needsPush: false,
+        hasUpstream: false
+      };
+    }
+  }
+
+  /**
+   * Get list of files with merge conflicts
+   */
+  async getConflictedFiles(): Promise<string[]> {
+    try {
+      const output = await this.executeGitCommand('diff --name-only --diff-filter=U');
+      return output.split('\n').filter(line => line.trim().length > 0);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Check if repository has merge conflicts
+   */
+  async hasConflicts(): Promise<boolean> {
+    const conflicts = await this.getConflictedFiles();
+    return conflicts.length > 0;
+  }
+
+  /**
+   * Resolve conflicts by accepting a strategy for all files
+   */
+  async resolveConflicts(strategy: 'ours' | 'theirs' | 'manual'): Promise<{
+    success: boolean;
+    resolvedFiles: string[];
+    remainingConflicts: string[];
+  }> {
+    const conflictedFiles = await this.getConflictedFiles();
+    
+    if (conflictedFiles.length === 0) {
+      return { success: true, resolvedFiles: [], remainingConflicts: [] };
+    }
+    
+    const resolvedFiles: string[] = [];
+    const remainingConflicts: string[] = [];
+    
+    if (strategy === 'manual') {
+      return {
+        success: false,
+        resolvedFiles: [],
+        remainingConflicts: conflictedFiles
+      };
+    }
+    
+    for (const file of conflictedFiles) {
+      try {
+        const command = strategy === 'ours' 
+          ? `checkout --ours "${file}"` 
+          : `checkout --theirs "${file}"`;
+        
+        await this.executeGitCommand(command);
+        await this.add([file]);
+        resolvedFiles.push(file);
+      } catch (error) {
+        remainingConflicts.push(file);
+      }
+    }
+    
+    return {
+      success: remainingConflicts.length === 0,
+      resolvedFiles,
+      remainingConflicts
+    };
+  }
+
+  /**
+   * Abort an ongoing merge
+   */
+  async abortMerge(): Promise<void> {
+    await this.executeGitCommand('merge --abort');
+  }
+
+  /**
+   * Continue a merge after resolving conflicts
+   */
+  async continueMerge(): Promise<void> {
+    await this.executeGitCommand('merge --continue');
+  }
+
+  /**
+   * Check if a merge is in progress
+   */
+  async isMergeInProgress(): Promise<boolean> {
+    try {
+      await this.executeGitCommand('rev-parse --verify MERGE_HEAD');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Rebase current branch onto another branch
+   */
+  async rebase(options: {
+    onto: string;
+    interactive?: boolean;
+    abort?: boolean;
+    continue?: boolean;
+    skip?: boolean;
+  }): Promise<{ success: boolean; output: string; conflicts?: string[] }> {
+    const { onto, interactive = false, abort = false, continue: cont = false, skip = false } = options;
+    
+    let command = 'rebase';
+    
+    if (abort) {
+      command += ' --abort';
+    } else if (cont) {
+      command += ' --continue';
+    } else if (skip) {
+      command += ' --skip';
+    } else {
+      if (interactive) {
+        command += ' --interactive';
+      }
+      command += ` ${onto}`;
+    }
+    
+    try {
+      const output = await this.executeGitCommand(command);
+      return { success: true, output };
+    } catch (error: any) {
+      if (error.message && error.message.toLowerCase().includes('conflict')) {
+        const conflicts = await this.getConflictedFiles();
+        return { 
+          success: false, 
+          output: error.message, 
+          conflicts 
+        };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Check if a rebase is in progress
+   */
+  async isRebaseInProgress(): Promise<boolean> {
+    try {
+      await this.executeGitCommand('rev-parse --verify REBASE_HEAD');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Stash changes
+   */
+  async stash(options: {
+    message?: string;
+    includeUntracked?: boolean;
+    keepIndex?: boolean;
+    pop?: boolean;
+    apply?: boolean;
+    drop?: boolean;
+    list?: boolean;
+    stashIndex?: number;
+  } = {}): Promise<string> {
+    const { 
+      message, 
+      includeUntracked = false, 
+      keepIndex = false,
+      pop = false,
+      apply = false,
+      drop = false,
+      list = false,
+      stashIndex
+    } = options;
+
+    let command = 'stash';
+
+    if (list) {
+      command += ' list';
+    } else if (pop) {
+      command += ' pop';
+      if (stashIndex !== undefined) {
+        command += ` stash@{${stashIndex}}`;
+      }
+    } else if (apply) {
+      command += ' apply';
+      if (stashIndex !== undefined) {
+        command += ` stash@{${stashIndex}}`;
+      }
+    } else if (drop) {
+      command += ' drop';
+      if (stashIndex !== undefined) {
+        command += ` stash@{${stashIndex}}`;
+      }
+    } else {
+      // Default stash push
+      command += ' push';
+      if (message) {
+        command += ` -m "${message}"`;
+      }
+      if (includeUntracked) {
+        command += ' --include-untracked';
+      }
+      if (keepIndex) {
+        command += ' --keep-index';
+      }
+    }
+
+    return await this.executeGitCommand(command);
+  }
+
+  /**
+   * Reset repository state
+   */
+  async reset(options: {
+    mode: 'soft' | 'mixed' | 'hard';
+    target?: string;
+    files?: string[];
+  }): Promise<void> {
+    const { mode, target = 'HEAD', files = [] } = options;
+
+    if (files.length > 0) {
+      // Reset specific files
+      const command = `reset ${target} -- ${files.join(' ')}`;
+      await this.executeGitCommand(command);
+    } else {
+      // Reset to commit
+      const command = `reset --${mode} ${target}`;
+      await this.executeGitCommand(command);
+    }
+  }
+
+  /**
+   * Cherry-pick commits
+   */
+  async cherryPick(options: {
+    commits: string[];
+    abort?: boolean;
+    continue?: boolean;
+    quit?: boolean;
+    noCommit?: boolean;
+  }): Promise<{ success: boolean; output: string; conflicts?: string[] }> {
+    const { commits, abort = false, continue: cont = false, quit = false, noCommit = false } = options;
+
+    let command = 'cherry-pick';
+
+    if (abort) {
+      command += ' --abort';
+    } else if (cont) {
+      command += ' --continue';
+    } else if (quit) {
+      command += ' --quit';
+    } else {
+      if (noCommit) {
+        command += ' --no-commit';
+      }
+      command += ` ${commits.join(' ')}`;
+    }
+
+    try {
+      const output = await this.executeGitCommand(command);
+      return { success: true, output };
+    } catch (error: any) {
+      if (error.message && error.message.toLowerCase().includes('conflict')) {
+        const conflicts = await this.getConflictedFiles();
+        return { 
+          success: false, 
+          output: error.message, 
+          conflicts 
+        };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Get reflog entries
+   */
+  async getReflog(limit: number = 20): Promise<Array<{
+    hash: string;
+    shortHash: string;
+    action: string;
+    message: string;
+  }>> {
+    try {
+      const output = await this.executeGitCommand(`reflog --oneline -n ${limit}`);
+      const lines = output.split('\n').filter(line => line.trim());
+      
+      return lines.map(line => {
+        const match = line.match(/^([a-f0-9]+)\s+(.+?):\s*(.*)$/);
+        if (match) {
+          const [, shortHash, action, message] = match;
+          return {
+            hash: shortHash || '',
+            shortHash: shortHash || '',
+            action: action || '',
+            message: message || ''
+          };
+        }
+        return {
+          hash: '',
+          shortHash: '',
+          action: '',
+          message: line
+        };
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Clean untracked files and directories
+   */
+  async clean(options: {
+    dryRun?: boolean;
+    force?: boolean;
+    directories?: boolean;
+    ignored?: boolean;
+  } = {}): Promise<string> {
+    const { dryRun = false, force = false, directories = false, ignored = false } = options;
+
+    let command = 'clean';
+    
+    if (dryRun) {
+      command += ' --dry-run';
+    }
+    if (force) {
+      command += ' --force';
+    }
+    if (directories) {
+      command += ' -d';
+    }
+    if (ignored) {
+      command += ' -x';
+    }
+
+    return await this.executeGitCommand(command);
+  }
+
+  /**
+   * Get repository statistics
+   */
+  async getRepositoryStats(): Promise<{
+    totalCommits: number;
+    totalBranches: number;
+    totalTags: number;
+    repositorySize: string;
+    lastCommitDate: Date | null;
+  }> {
+    try {
+      const [commitCount, branchCount, tagCount, lastCommit] = await Promise.all([
+        this.executeGitCommand('rev-list --count HEAD').catch(() => '0'),
+        this.executeGitCommand('branch -a --format="%(refname:short)"').then(out => out.split('\n').filter(b => b.trim()).length).catch(() => 0),
+        this.executeGitCommand('tag -l').then(out => out.split('\n').filter(t => t.trim()).length).catch(() => 0),
+        this.executeGitCommand('log -1 --format="%ad" --date=iso-strict').catch(() => '')
+      ]);
+      
+      const repoSize = await this.executeGitCommand('count-objects -vH').catch(() => '');
+      const sizeMatch = repoSize.match(/size-pack\s+(\S+)/);
+      
+      return {
+        totalCommits: parseInt(commitCount.trim()) || 0,
+        totalBranches: branchCount,
+        totalTags: tagCount,
+        repositorySize: (sizeMatch && sizeMatch[1]) ? sizeMatch[1] : 'unknown',
+        lastCommitDate: lastCommit ? new Date(lastCommit.trim()) : null
+      };
+    } catch {
+      return {
+        totalCommits: 0,
+        totalBranches: 0,
+        totalTags: 0,
+        repositorySize: 'unknown',
+        lastCommitDate: null
+      };
+    }
+  }
+
+  /**
+   * Validate repository integrity
+   */
+  async validateRepository(): Promise<{
+    isValid: boolean;
+    issues: string[];
+    warnings: string[];
+  }> {
+    const issues: string[] = [];
+    const warnings: string[] = [];
+
+    try {
+      // Check if .git directory exists and is valid
+      await this.executeGitCommand('rev-parse --git-dir');
+    } catch {
+      issues.push('Invalid git repository - .git directory missing or corrupted');
+      return { isValid: false, issues, warnings };
+    }
+
+    try {
+      // Check for uncommitted changes
+      const status = await this.getStatus();
+      if (status.isDirty) {
+        warnings.push('Repository has uncommitted changes');
+      }
+
+      // Check for merge conflicts
+      const hasConflicts = await this.hasConflicts();
+      if (hasConflicts) {
+        issues.push('Repository has unresolved merge conflicts');
+      }
+
+      // Check for ongoing operations
+      const mergeInProgress = await this.isMergeInProgress();
+      const rebaseInProgress = await this.isRebaseInProgress();
+      
+      if (mergeInProgress) {
+        warnings.push('Merge operation in progress');
+      }
+      if (rebaseInProgress) {
+        warnings.push('Rebase operation in progress');
+      }
+
+      // Check remote connectivity
+      try {
+        await this.fetch({ all: true });
+      } catch {
+        warnings.push('Unable to connect to remote repositories');
+      }
+
+    } catch (error) {
+      issues.push(`Repository validation failed: ${error}`);
+    }
+
+    return {
+      isValid: issues.length === 0,
+      issues,
+      warnings
+    };
+  }
 }
