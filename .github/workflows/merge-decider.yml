@@ -18,47 +18,21 @@ permissions:
   id-token: write
 
 jobs:
-  # Wait for all CI checks to complete before making merge decision
-  await-ci-completion:
+  # AI-powered merge decision that waits for all CI jobs using native needs
+  ai-merge-decision:
     runs-on: ubuntu-latest
-    steps:
-      - name: Wait for CI workflows
-        uses: fountainhead/action-wait-for-check@v1.2.0
-        id: wait-for-ci
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          checkName: test
-          ref: ${{ github.event.pull_request.head.sha }}
-          timeoutSeconds: 1800 # 30 minutes
-          intervalSeconds: 30
-
-      - name: Wait for PR checks
-        uses: fountainhead/action-wait-for-check@v1.2.0
-        id: wait-for-pr-checks
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          checkName: validate-pr
-          ref: ${{ github.event.pull_request.head.sha }}
-          timeoutSeconds: 1800 # 30 minutes
-          intervalSeconds: 30
-
-      - name: Wait for Claude review
-        uses: fountainhead/action-wait-for-check@v1.2.0
-        id: wait-for-claude-review
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          checkName: claude-review
-          ref: ${{ github.event.pull_request.head.sha }}
-          timeoutSeconds: 1800 # 30 minutes
-          intervalSeconds: 30
-        continue-on-error: true # Claude review might not run for all PRs
-
-  # Collect comprehensive context for AI decision
-  collect-context:
-    runs-on: ubuntu-latest
-    needs: await-ci-completion
-    outputs:
-      context-artifact: ${{ steps.collect.outputs.artifact-name }}
+    # Wait for all CI jobs to complete using native GitHub Actions dependencies
+    needs: [test, security, compatibility, validate-pr, compatibility-check, claude-review]
+    # Always run even if some CI jobs fail (we'll analyze the failures)
+    if: always()
+    
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: read
+      actions: read
+      id-token: write
+      
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -70,22 +44,26 @@ jobs:
         with:
           node-version: '20.x'
 
-      - name: Collect CI and PR context
-        id: collect
+      - name: Collect comprehensive context for AI analysis
+        id: collect-context
         run: |
           # Create context directory
           mkdir -p .github/context
+          
+          echo "🔍 Collecting comprehensive PR context for AI analysis..."
           
           # Collect basic PR information
           echo "=== PR INFORMATION ===" > .github/context/pr-info.txt
           echo "PR Number: ${{ github.event.pull_request.number }}" >> .github/context/pr-info.txt
           echo "Title: ${{ github.event.pull_request.title }}" >> .github/context/pr-info.txt
           echo "Author: ${{ github.event.pull_request.user.login }}" >> .github/context/pr-info.txt
+          echo "Author Association: ${{ github.event.pull_request.author_association }}" >> .github/context/pr-info.txt
           echo "Base Branch: ${{ github.event.pull_request.base.ref }}" >> .github/context/pr-info.txt
           echo "Head Branch: ${{ github.event.pull_request.head.ref }}" >> .github/context/pr-info.txt
           echo "Files Changed: ${{ github.event.pull_request.changed_files }}" >> .github/context/pr-info.txt
           echo "Additions: ${{ github.event.pull_request.additions }}" >> .github/context/pr-info.txt
           echo "Deletions: ${{ github.event.pull_request.deletions }}" >> .github/context/pr-info.txt
+          echo "Draft: ${{ github.event.pull_request.draft }}" >> .github/context/pr-info.txt
           echo "" >> .github/context/pr-info.txt
           
           # Get PR description
@@ -95,131 +73,96 @@ jobs:
           
           # Collect commit information
           echo "=== COMMITS ===" > .github/context/commits.txt
-          git log --oneline ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} >> .github/context/commits.txt
+          git log --oneline ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} >> .github/context/commits.txt || echo "Could not get commits" >> .github/context/commits.txt
           echo "" >> .github/context/commits.txt
           
           # Collect file changes
-          echo "=== FILE CHANGES ===" > .github/context/changes.txt
-          git diff --name-status ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} >> .github/context/changes.txt
-          echo "" >> .github/context/changes.txt
+          echo "=== FILE CHANGES ===" > .github/context/file-changes.txt
+          git diff --name-status ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} >> .github/context/file-changes.txt || echo "Could not get file changes" >> .github/context/file-changes.txt
+          echo "" >> .github/context/file-changes.txt
           
           # Get diff stats
-          echo "=== DIFF STATISTICS ===" >> .github/context/changes.txt
-          git diff --stat ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} >> .github/context/changes.txt
-          echo "" >> .github/context/changes.txt
-          
-          # Analyze affected file types
-          echo "=== FILE TYPE ANALYSIS ===" >> .github/context/changes.txt
-          git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} | sed 's/.*\.//' | sort | uniq -c | sort -nr >> .github/context/changes.txt
-          
-          # Check for breaking changes indicators
-          echo "=== BREAKING CHANGES ANALYSIS ===" > .github/context/breaking-changes.txt
-          if git log --format=%B ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} | grep -i "BREAKING CHANGE"; then
-            echo "⚠️ BREAKING CHANGES DETECTED in commit messages" >> .github/context/breaking-changes.txt
-            git log --format="%h %s" ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} | grep -i "BREAKING" >> .github/context/breaking-changes.txt
-          else
-            echo "✅ No explicit breaking changes found in commit messages" >> .github/context/breaking-changes.txt
-          fi
-          
-          # Check for major version changes
-          if git diff ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} -- package.json | grep -E '^\+.*"version"' | grep -E '[0-9]+\.0\.0'; then
-            echo "⚠️ Major version bump detected in package.json" >> .github/context/breaking-changes.txt
-          fi
-          
-          # Analyze dependencies changes
-          if git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} | grep -q "package.json"; then
-            echo "=== DEPENDENCY CHANGES ===" >> .github/context/breaking-changes.txt
-            git diff ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} -- package.json | grep -E '^\+|\^-' | grep -E '"[^"]+":' >> .github/context/breaking-changes.txt
-          fi
-          
-          echo "artifact-name=merge-context-${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          echo "=== DIFF STATISTICS ===" >> .github/context/file-changes.txt
+          git diff --stat ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} >> .github/context/file-changes.txt || echo "Could not get diff stats" >> .github/context/file-changes.txt
+          echo "" >> .github/context/file-changes.txt
 
-      - name: Get CI check results and Claude review
+      - name: Collect CI job results using GitHub needs context
         run: |
-          # Get check run results using GitHub API
-          echo "=== CI CHECK RESULTS ===" > .github/context/ci-results.txt
-          
-          # Use GitHub CLI to get check runs
-          gh api repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}/check-runs \
-            --jq '.check_runs[] | select(.name | test("test|security|compatibility|validate-pr|claude-review")) | {name: .name, status: .status, conclusion: .conclusion, started_at: .started_at, completed_at: .completed_at}' \
-            >> .github/context/ci-results.txt 2>/dev/null || echo "Could not fetch check runs via API" >> .github/context/ci-results.txt
-          
-          # Get Claude Code review comments specifically
+          echo "=== CI JOB RESULTS ===" > .github/context/ci-results.txt
+          echo "Collected from GitHub Actions job results:" >> .github/context/ci-results.txt
           echo "" >> .github/context/ci-results.txt
-          echo "=== CLAUDE CODE REVIEW ANALYSIS ===" >> .github/context/ci-results.txt
           
-          # Fetch PR review comments from Claude
-          gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
-            --jq '.[] | select(.user.login == "claude-code-action[bot]" or .user.login == "github-actions[bot]") | {state: .state, body: .body, submitted_at: .submitted_at}' \
-            >> .github/context/claude-review.json 2>/dev/null || echo "[]" > .github/context/claude-review.json
+          # Analyze results from needs context
+          echo "test job result: ${{ needs.test.result }}" >> .github/context/ci-results.txt
+          echo "security job result: ${{ needs.security.result }}" >> .github/context/ci-results.txt  
+          echo "compatibility job result: ${{ needs.compatibility.result }}" >> .github/context/ci-results.txt
+          echo "validate-pr job result: ${{ needs.validate-pr.result }}" >> .github/context/ci-results.txt
+          echo "compatibility-check job result: ${{ needs.compatibility-check.result }}" >> .github/context/ci-results.txt
+          echo "claude-review job result: ${{ needs.claude-review.result }}" >> .github/context/ci-results.txt
+          echo "" >> .github/context/ci-results.txt
           
-          # Also get issue comments from Claude
-          gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments \
-            --jq '.[] | select(.user.login == "claude-code-action[bot]" or .user.login == "github-actions[bot]") | {body: .body, created_at: .created_at, updated_at: .updated_at}' \
-            >> .github/context/claude-comments.json 2>/dev/null || echo "[]" > .github/context/claude-comments.json
+          # Determine overall CI status
+          if [[ "${{ needs.test.result }}" == "success" && 
+                "${{ needs.security.result }}" == "success" && 
+                "${{ needs.compatibility.result }}" == "success" && 
+                "${{ needs.validate-pr.result }}" == "success" && 
+                "${{ needs.compatibility-check.result }}" == "success" ]]; then
+            echo "Overall CI Status: PASS" >> .github/context/ci-results.txt
+          else
+            echo "Overall CI Status: FAIL" >> .github/context/ci-results.txt
+            echo "Failed jobs:" >> .github/context/ci-results.txt
+            [[ "${{ needs.test.result }}" != "success" ]] && echo "  - test: ${{ needs.test.result }}" >> .github/context/ci-results.txt
+            [[ "${{ needs.security.result }}" != "success" ]] && echo "  - security: ${{ needs.security.result }}" >> .github/context/ci-results.txt
+            [[ "${{ needs.compatibility.result }}" != "success" ]] && echo "  - compatibility: ${{ needs.compatibility.result }}" >> .github/context/ci-results.txt
+            [[ "${{ needs.validate-pr.result }}" != "success" ]] && echo "  - validate-pr: ${{ needs.validate-pr.result }}" >> .github/context/ci-results.txt
+            [[ "${{ needs.compatibility-check.result }}" != "success" ]] && echo "  - compatibility-check: ${{ needs.compatibility-check.result }}" >> .github/context/ci-results.txt
+          fi
+
+      - name: Collect Claude Code review findings
+        run: |
+          echo "=== CLAUDE CODE REVIEW ANALYSIS ===" > .github/context/claude-review-analysis.txt
+          echo "Claude Review Job Result: ${{ needs.claude-review.result }}" >> .github/context/claude-review-analysis.txt
+          echo "" >> .github/context/claude-review-analysis.txt
           
-          # Extract key insights from Claude review
-          if [ -s .github/context/claude-review.json ] && [ "$(cat .github/context/claude-review.json)" != "[]" ]; then
-            echo "✅ Claude Code review found" >> .github/context/ci-results.txt
+          # Get Claude Code review comments
+          if command -v gh &> /dev/null; then
+            echo "Fetching Claude Code review comments..." >> .github/context/claude-review-analysis.txt
             
-            # Check if Claude review indicates issues
-            if jq -r '.[].body' .github/context/claude-review.json | grep -qi "not.*recommend\|concern\|issue\|problem\|fix.*needed\|should.*not\|❌\|⚠️"; then
-              echo "⚠️ Claude Code review indicates potential issues" >> .github/context/ci-results.txt
+            # Get PR reviews from Claude
+            gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
+              --jq '.[] | select(.user.login | test("claude|github-actions")) | {state: .state, body: .body, submitted_at: .submitted_at}' \
+              > .github/context/claude-review.json 2>/dev/null || echo "[]" > .github/context/claude-review.json
+            
+            # Get issue comments from Claude  
+            gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments \
+              --jq '.[] | select(.user.login | test("claude|github-actions")) | {body: .body, created_at: .created_at}' \
+              > .github/context/claude-comments.json 2>/dev/null || echo "[]" > .github/context/claude-comments.json
+            
+            # Analyze Claude review sentiment
+            if [ -s .github/context/claude-review.json ] && [ "$(cat .github/context/claude-review.json)" != "[]" ]; then
+              echo "✅ Claude Code review found" >> .github/context/claude-review-analysis.txt
+              
+              # Check if Claude review indicates issues
+              if jq -r '.[].body' .github/context/claude-review.json 2>/dev/null | grep -qi "not.*recommend\|concern\|issue\|problem\|fix.*needed\|should.*not\|❌\|⚠️\|blocking"; then
+                echo "⚠️ Claude Code review indicates concerns or issues" >> .github/context/claude-review-analysis.txt
+                echo "CLAUDE_SENTIMENT=negative" >> $GITHUB_ENV
+              elif jq -r '.[].body' .github/context/claude-review.json 2>/dev/null | grep -qi "looks good\|approved\|ready\|✅\|well done\|recommend.*merg"; then
+                echo "✅ Claude Code review appears positive" >> .github/context/claude-review-analysis.txt
+                echo "CLAUDE_SENTIMENT=positive" >> $GITHUB_ENV
+              else
+                echo "ℹ️ Claude Code review is neutral" >> .github/context/claude-review-analysis.txt
+                echo "CLAUDE_SENTIMENT=neutral" >> $GITHUB_ENV
+              fi
             else
-              echo "✅ Claude Code review appears positive" >> .github/context/ci-results.txt
+              echo "ℹ️ No Claude Code review found" >> .github/context/claude-review-analysis.txt
+              echo "CLAUDE_SENTIMENT=none" >> $GITHUB_ENV
             fi
           else
-            echo "ℹ️ No Claude Code review found" >> .github/context/ci-results.txt
+            echo "GitHub CLI not available, skipping Claude review collection" >> .github/context/claude-review-analysis.txt
+            echo "CLAUDE_SENTIMENT=unknown" >> $GITHUB_ENV
           fi
-          
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Collect project context
-        run: |
-          # Get package.json info
-          echo "=== PROJECT CONTEXT ===" > .github/context/project-info.txt
-          echo "Package Name: $(jq -r '.name' package.json)" >> .github/context/project-info.txt
-          echo "Version: $(jq -r '.version' package.json)" >> .github/context/project-info.txt
-          echo "Description: $(jq -r '.description' package.json)" >> .github/context/project-info.txt
-          echo "" >> .github/context/project-info.txt
-          
-          # Get recent releases/tags
-          echo "=== RECENT RELEASES ===" >> .github/context/project-info.txt
-          git tag --sort=-version:refname | head -5 >> .github/context/project-info.txt || echo "No tags found" >> .github/context/project-info.txt
-          echo "" >> .github/context/project-info.txt
-          
-          # Get contributor info
-          echo "=== CONTRIBUTOR INFO ===" >> .github/context/project-info.txt
-          echo "PR Author Association: ${{ github.event.pull_request.author_association }}" >> .github/context/project-info.txt
-          echo "First Time Contributor: ${{ github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR' }}" >> .github/context/project-info.txt
-
-      - name: Upload context as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: merge-context-${{ github.event.pull_request.number }}
-          path: .github/context/
-          retention-days: 7
-
-  # AI-powered merge decision
-  ai-merge-decision:
-    runs-on: ubuntu-latest
-    needs: [await-ci-completion, collect-context]
-    permissions:
-      contents: read
-      pull-requests: write
-      checks: read
-      actions: read
-      id-token: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download context artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.collect-context.outputs.context-artifact }}
-          path: .github/context/
 
       - name: AI Merge Decision Analysis
         id: merge-decision
@@ -233,67 +176,42 @@ jobs:
             
             You are an AI merge decider for the gitplus repository. Your primary job is to synthesize the **Claude Code review findings** with CI/CD results to make a **PASS/FAIL decision** on whether this PR should be merged.
             
-            ## CRITICAL: Claude Code Review Integration
+            ## CRITICAL: Decision Hierarchy
             
-            **The Claude Code review action has already performed extensive code analysis**. Your role is to:
+            The **Claude Code review action has already performed expert code analysis**. Your decision hierarchy:
             
-            1. **Heavily weight the Claude Code review findings** (if available)
-            2. **Synthesize the expert code review** with CI/CD status
-            3. **Make the final merge decision** based on this combination
+            1. **Claude Code Review Says No/Has Concerns** → **AUTOMATIC FAIL** (regardless of CI status)
+            2. **Claude Code Review Positive + CI Passes** → **PASS**
+            3. **Claude Code Review Positive + CI Fails** → **FAIL** (fix CI first)
+            4. **Claude Code Review Neutral/None + CI Passes** → **PASS**
+            5. **Any Critical CI Failures** → **FAIL**
             
-            ### Decision Hierarchy:
+            ## Current Context
             
-            #### If Claude Code Review EXISTS:
-            - **Claude review indicates issues/concerns**: **AUTOMATIC FAIL** regardless of CI status
-            - **Claude review is positive + CI passes**: **LIKELY PASS** 
-            - **Claude review is positive + CI fails**: **FAIL** (fix CI first)
-            - **Claude review is neutral + CI passes**: **PASS** (CI is sufficient)
+            **CI Job Results (from GitHub Actions):**
+            - test: ${{ needs.test.result }}
+            - security: ${{ needs.security.result }}
+            - compatibility: ${{ needs.compatibility.result }}
+            - validate-pr: ${{ needs.validate-pr.result }}
+            - compatibility-check: ${{ needs.compatibility-check.result }}
+            - claude-review: ${{ needs.claude-review.result }}
             
-            #### If NO Claude Code Review:
-            - Fall back to comprehensive CI/CD + basic analysis
-            - Higher scrutiny required since no expert code review exists
+            **Claude Review Sentiment:** ${{ env.CLAUDE_SENTIMENT }}
+            **Target Branch:** ${{ github.event.pull_request.base.ref }}
+            **PR Author:** ${{ github.event.pull_request.user.login }} (${{ github.event.pull_request.author_association }})
             
-            ## Your Decision Criteria
+            ## Context Files Available
             
-            ## Branch-Specific Rules:
-            - **main branch**: Highest standards - production-ready code only
-            - **develop branch**: Integration-ready code with CI passing
-            - **release/* branches**: Stabilization focus - bug fixes only
-            
-            ## Context Available to You:
-            
-            **Priority Order for Analysis:**
+            **Priority order for analysis:**
             1. `.github/context/claude-review.json` - **MOST IMPORTANT** - Claude's expert code review
-            2. `.github/context/claude-comments.json` - Claude's additional feedback
-            3. `.github/context/ci-results.txt` - CI check results and Claude review summary
-            4. `.github/context/pr-info.txt` - PR details and description
-            5. `.github/context/commits.txt` - Commit history
-            6. `.github/context/file-changes.txt` - File changes and statistics  
-            7. `.github/context/breaking-changes.txt` - Breaking changes analysis
-            8. `.github/context/project-context.txt` - Project and contributor context
+            2. `.github/context/claude-comments.json` - Claude's additional feedback  
+            3. `.github/context/claude-review-analysis.txt` - Claude review summary
+            4. `.github/context/ci-results.txt` - CI job results and analysis
+            5. `.github/context/pr-info.txt` - PR details and description
+            6. `.github/context/commits.txt` - Commit history
+            7. `.github/context/file-changes.txt` - File changes and statistics
             
-            ## Required Decision Logic:
-            
-            ### Step 1: Analyze Claude Code Review
-            First, thoroughly examine the Claude Code review findings:
-            - Read `.github/context/claude-review.json` for formal reviews
-            - Read `.github/context/claude-comments.json` for additional comments
-            - Look for key indicators: recommendations against merging, serious concerns, blocking issues
-            - If Claude recommends against merging or raises serious concerns: **FAIL**
-            
-            ### Step 2: Check CI/CD Status
-            - All required checks must pass for main branch
-            - Security audits must be clean
-            - Build compatibility verified
-            
-            ### Step 3: Make Decision
-            - **Claude says no**: FAIL regardless of CI
-            - **Claude says yes + CI passes**: PASS
-            - **Claude neutral + CI passes**: PASS  
-            - **Any CI failure on main branch**: FAIL
-            - **Security issues**: FAIL
-            
-            ## Required Output Format:
+            ## Required Output Format
             
             You MUST provide your decision in this exact format:
             
@@ -301,42 +219,48 @@ jobs:
             ## 🤖 AI Merge Decision: [PASS/FAIL]
             
             **Target Branch:** ${{ github.event.pull_request.base.ref }}
-            **Decision Basis:** [Claude Code Review + CI Status / CI Status Only]
+            **Decision Basis:** [Claude Code Review + CI Status / CI Status Only]  
+            **Claude Review Sentiment:** ${{ env.CLAUDE_SENTIMENT }}
             
             ### 🎯 Claude Code Review Analysis
             **Status:** [Found/Not Found]
             **Recommendation:** [Positive/Negative/Neutral/Not Available]
-            **Key Findings:** [Summary of Claude's expert analysis]
+            **Key Findings:** [Summary of Claude's expert analysis or "No Claude review available"]
             
-            ### 🔧 CI/CD Status
-            **Overall:** [Pass/Fail]  
-            **Critical Issues:** [List any failures]
+            ### 🔧 CI/CD Status Summary
+            **Overall:** [Pass/Fail]
+            **Test Results:** ${{ needs.test.result }}
+            **Security:** ${{ needs.security.result }}
+            **Compatibility:** ${{ needs.compatibility.result }}
+            **PR Validation:** ${{ needs.validate-pr.result }}
+            **Cross-platform:** ${{ needs.compatibility-check.result }}
             
             ### ✅ Strengths
-            - [List positive aspects]
+            - [List positive aspects of this PR]
             
-            ### ⚠️ Issues Found  
-            - [List any issues, with severity]
+            ### ⚠️ Issues Found
+            - [List any issues with severity levels]
             
             ### 🔧 Required Actions (if FAIL)
-            1. [Specific step to fix issue 1]
-            2. [Specific step to fix issue 2]
+            1. [Specific, actionable step to fix issue 1]
+            2. [Specific, actionable step to fix issue 2]
             3. [etc.]
             
             ### 💡 Final Recommendation
-            [Clear explanation of why this should/shouldn't merge, emphasizing Claude Code review findings]
+            [Clear explanation of why this should/shouldn't merge, emphasizing how you weighted Claude Code review findings vs CI results]
             
             ---
-            *Decision made by Claude AI • Integrating Claude Code expert review • PR #${{ github.event.pull_request.number }}*
+            *Decision made by Claude AI • Integrating expert Claude Code review • PR #${{ github.event.pull_request.number }}*
             ```
             
-            ## Decision Rules:
+            ## Decision Rules
             - **FAIL if**: Claude Code review recommends against merging OR critical CI failures
-            - **PASS if**: Claude Code review is positive/neutral AND CI passes
-            - **Respect the expert code analysis** - don't override Claude Code's technical findings
-            - Be constructive in feedback and provide specific remediation steps
+            - **PASS if**: Claude Code review is positive/neutral AND CI passes  
+            - **Always respect Claude Code's expert technical analysis** - don't override its code quality findings
+            - Provide specific, actionable remediation steps for failures
+            - Consider the author's experience level (first-time contributors get more guidance)
             
-            **Remember: Claude Code has already done the deep technical analysis. Your job is to synthesize that expert opinion with the CI/CD results to make the final merge decision.**
+            **Remember: The Claude Code review has done the deep technical code analysis. Your job is to synthesize that expert opinion with CI/CD results for the final merge decision.**
 
       - name: Set merge decision status
         run: |
@@ -365,7 +289,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Summary job that branch protection will check
+  # Summary job that branch protection will check - this is what branch protection waits for
   merge-decision-summary:
     runs-on: ubuntu-latest
     needs: [ai-merge-decision]
@@ -376,8 +300,11 @@ jobs:
           if [ "${{ needs.ai-merge-decision.result }}" = "success" ]; then
             echo "✅ AI Merge Decision: APPROVED"
             echo "This PR has been approved by the AI merge decider and is ready to merge."
+            echo "The AI analyzed Claude Code review findings and all CI results to make this decision."
           else
-            echo "❌ AI Merge Decision: REJECTED"
-            echo "This PR has been rejected by the AI merge decider. Please check the AI analysis comment for details and required actions."
+            echo "❌ AI Merge Decision: REJECTED"  
+            echo "This PR has been rejected by the AI merge decider."
+            echo "Please check the AI analysis comment for detailed feedback and required actions."
+            echo "The decision was based on Claude Code review findings and/or CI failures."
             exit 1
           fi
