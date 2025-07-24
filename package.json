@@ -4,8 +4,8 @@
   "description": "AI-powered Git automation MCP server for Claude Code",
   "main": "dist/index.js",
   "bin": {
-    "gitplus": "dist/cli.js",
-    "gp": "dist/cli.js"
+    "gitplus": "dist/main.js",
+    "gp": "dist/main.js"
   },
   "scripts": {
     "build": "tsc",
@@ -31,11 +31,9 @@
     "server": {
       "command": "node",
       "args": [
-        "${pkgPath}/dist/index.js",
-        "--transport",
-        "stdio"
-      ],
-      "transport": "stdio"
+        "${pkgPath}/dist/main.js",
+        "--mcp"
+      ]
     }
   },
   "keywords": [

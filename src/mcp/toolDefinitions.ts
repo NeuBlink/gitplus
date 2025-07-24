@@ -166,6 +166,14 @@ export const toolDefinitions = [
       fix: z.boolean().optional().describe('Attempt to fix issues automatically')
     },
   },
+  {
+    name: 'info',
+    title: 'GitPlus MCP Info',
+    description: 'Get comprehensive information about GitPlus MCP server capabilities, tools, and usage',
+    inputSchema: {
+      repoPath: z.string().optional().describe('Full absolute path to the git repository (optional - provides repo-specific info if given)')
+    },
+  },
 ] as const;
 
 export type ToolName = typeof toolDefinitions[number]['name'];
@@ -184,3 +192,4 @@ export type ResetToolInput = z.infer<z.ZodObject<typeof toolDefinitions[9]['inpu
 export type RebaseToolInput = z.infer<z.ZodObject<typeof toolDefinitions[10]['inputSchema']>>;
 export type RecoverToolInput = z.infer<z.ZodObject<typeof toolDefinitions[11]['inputSchema']>>;
 export type ValidateToolInput = z.infer<z.ZodObject<typeof toolDefinitions[12]['inputSchema']>>;
+export type InfoToolInput = z.infer<z.ZodObject<typeof toolDefinitions[13]['inputSchema']>>;
