@@ -1,10 +1,8 @@
 # Gitplus - AI-Powered Git Automation for Claude Code
 
-[![npm version](https://badge.fury.io/js/%40gitplus%2Fmcp.svg)](https://badge.fury.io/js/%40gitplus%2Fmcp)
 [![CI](https://github.com/neublink/gitplus/workflows/CI/badge.svg)](https://github.com/neublink/gitplus/actions)
-[![codecov](https://codecov.io/gh/neublink/gitplus/branch/main/graph/badge.svg)](https://codecov.io/gh/neublink/gitplus)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/node/v/@gitplus/mcp.svg)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D16.0.0-brightgreen)](https://nodejs.org/)
 
 Gitplus is a Model Context Protocol (MCP) server that brings AI-powered git automation directly to Claude Code. Streamline your git workflow with intelligent commit messages, branch suggestions, and automated pull request creation.
 
@@ -21,15 +19,33 @@ Gitplus is a Model Context Protocol (MCP) server that brings AI-powered git auto
 
 ## Quick Start
 
-### Installation
+### Published Package Installation (Coming Soon)
 
-Install gitplus as an MCP server in Claude Code:
+Once published, install gitplus as an MCP server in Claude Code:
 
 ```bash
 claude mcp add gitplus -- npx @gitplus/mcp@latest
 ```
 
-That's it! Gitplus is now available as a tool in Claude Code.
+### Local Development Installation
+
+For development or testing before publication:
+
+```bash
+# Clone and build the project
+git clone https://github.com/neublink/gitplus.git
+cd gitplus
+npm install
+npm run build
+
+# Install CLI globally for command line usage
+npm link
+
+# Add to Claude Code as MCP server
+claude mcp add gitplus-local -- node $(pwd)/dist/index.js
+```
+
+Now you can use gitplus tools in Claude Code and CLI commands globally!
 
 ### Usage in Claude Code
 
@@ -210,11 +226,11 @@ Gitplus is built with:
 - **Node.js**: Cross-platform compatibility
 - **Conventional Commits**: Strict adherence to commit message standards
 
-## Local Build and Usage
+## Development Setup
 
 ### Prerequisites
 
-Before building and using gitplus locally, ensure you have:
+Before developing with gitplus, ensure you have:
 
 - **Node.js 16+**: Required runtime environment
 - **Claude CLI**: Install and authenticate with `claude auth login`
@@ -241,7 +257,7 @@ export GITPLUS_CLAUDE_COMMAND="claude"           # Claude CLI command path (defa
 
 **Important**: AI is mandatory - gitplus will fail immediately if Claude CLI is not available or working.
 
-### Build and Install
+### Development Workflow
 
 ```bash
 # Clone the repository
@@ -256,13 +272,19 @@ npm run build
 
 # Link CLI globally for testing
 npm link
+
+# Add to Claude Code as MCP server (local development)
+claude mcp add gitplus-local -- node $(pwd)/dist/index.js
 ```
 
-After linking, both `gitplus` and `gp` commands become available globally.
+After setup:
+- Both `gitplus` and `gp` CLI commands are available globally
+- Gitplus tools are available in Claude Code conversations
+- Any changes require `npm run build` to rebuild
 
-### CLI Usage
+### CLI Commands
 
-Once built and linked, you can use gitplus commands in any git repository:
+After linking (`npm link`), use gitplus commands in any git repository:
 
 ```bash
 # Navigate to your git repository
@@ -357,16 +379,20 @@ gitplus commit --dry-run  # Should generate intelligent commit message
 # If AI fails, gitplus falls back to rule-based analysis
 ```
 
-### Development Mode
-
-For active development:
+### Development Commands
 
 ```bash
 # Run in development mode with auto-reload
 npm run dev
 
-# Test MCP server directly
+# Test MCP server directly  
 npm run start
+
+# Run tests
+npm test
+
+# Run full validation (typecheck + tests)
+npm run validate
 
 # Clean and rebuild
 npm run clean && npm run build
@@ -383,40 +409,29 @@ Gitplus works out-of-the-box with sensible defaults. For advanced users, configu
 - ✅ **GitLab**: Full platform detection and MR creation via GitLab CLI
 - ✅ **Auto-detection**: Automatically detects platform from remote URL
 
-## CI/CD & Release Process
+## Publishing & Release
 
-### Automated Testing
-- **Continuous Integration**: All PRs are automatically tested across Node.js 18, 20, and 22
-- **Cross-platform**: Tests run on Ubuntu, macOS, and Windows
-- **Security Scanning**: Automated vulnerability detection and dependency audits
-- **Code Coverage**: Test coverage reports via Codecov
+### Manual Publishing
+Use the GitHub Actions workflow to publish:
 
-### Release Process
-1. **Create a release tag**: `git tag v1.x.x && git push origin v1.x.x`
-2. **Automated publishing**: GitHub Actions automatically:
-   - Runs full test suite
-   - Builds the package
-   - Publishes to NPM
-   - Creates GitHub release with changelog
-   - Verifies published package functionality
+1. **Go to Actions tab** in GitHub repository
+2. **Select "Manual Publish"** workflow  
+3. **Choose version bump**: patch, minor, or major
+4. **Click "Run workflow"** to automatically:
+   - Run full test suite
+   - Build the package
+   - Bump version and create git tag
+   - Publish to NPM registry
+   - Create GitHub release with changelog
+   - Verify published package
 
-### Development Workflow
+### Automated Release (Tag-based)
+Alternatively, create a release tag:
 ```bash
-# Install dependencies
-npm install
-
-# Run development build
-npm run dev
-
-# Run tests
-npm test
-
-# Run full validation (typecheck + tests)
-npm run validate
-
-# Build for production
-npm run build
+git tag v1.x.x && git push origin v1.x.x
 ```
+
+This triggers the existing release workflow for automated publishing.
 
 ## Contributing
 
@@ -441,13 +456,14 @@ We welcome contributions! Please follow these guidelines:
 git clone https://github.com/neublink/gitplus.git
 cd gitplus
 npm install
+npm run build
 
 # Link for local testing
 npm link
 gitplus --help
 
-# Run in development mode
-npm run dev
+# Add to Claude Code for MCP testing
+claude mcp add gitplus-local -- node $(pwd)/dist/index.js
 ```
 
 ## License
