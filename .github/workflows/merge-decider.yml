@@ -57,8 +57,8 @@ jobs:
             ```
             ## 🤖 Merge Decision: [PASS/FAIL]
             
-            **Target Branch:** ${{ github.event.pull_request.base.ref }}
-            **PR Author:** ${{ github.event.pull_request.user.login }}
+            **Target Branch:** $TARGET_BRANCH
+            **PR Author:** $PR_AUTHOR
             
             ### 🎯 Analysis Summary
             [Brief summary of your analysis]
@@ -67,12 +67,25 @@ jobs:
             [Clear explanation of why this should/shouldn't merge]
             
             ---
-            *Decision made by Claude AI • PR #${{ github.event.pull_request.number }}*
+            *Decision made by Claude AI • PR #$PR_NUMBER*
             ```
+        env:
+          TARGET_BRANCH: ${{ github.event.pull_request.base.ref }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
 
       - name: Set merge decision status
         run: |
-          if echo "$claude_response" | grep -iq "merge decision:.*pass"; then
+          # Check for emoji format first (preferred)
+          if echo "$claude_response" | grep -iq "🤖 merge decision:.*pass"; then
+            echo "MERGE_DECISION=pass" >> $GITHUB_ENV
+            echo "✅ Merge Decision: PASS"
+          elif echo "$claude_response" | grep -iq "🤖 merge decision:.*fail"; then
+            echo "MERGE_DECISION=fail" >> $GITHUB_ENV
+            echo "❌ Merge Decision: FAIL"
+            exit 1
+          # Fallback to non-emoji format for compatibility
+          elif echo "$claude_response" | grep -iq "merge decision:.*pass"; then
             echo "MERGE_DECISION=pass" >> $GITHUB_ENV
             echo "✅ Merge Decision: PASS"
           elif echo "$claude_response" | grep -iq "merge decision:.*fail"; then

@@ -72,47 +72,87 @@ class ContextCollector {
   }
 
   /**
-   * Execute shell command safely with input validation
+   * Execute shell command safely with input validation and parameterized commands
    */
-  safeExecSync(command, options = {}) {
-    // Additional command validation
-    if (!command || typeof command !== 'string') {
-      throw new Error('Invalid command');
-    }
-    
-    // Prevent command injection by checking for dangerous patterns
-    const dangerousPatterns = [
-      /[;&|`$()]/,  // Command separators and substitution
-      /\.\.\//,     // Path traversal
-      /^sudo\s/,    // Privilege escalation
-      /rm\s+-rf/,   // Dangerous file operations
-      />\s*\/dev\/null\s*2>&1/,  // Output redirection (already handled in npm commands)
-    ];
-    
-    // Allow some safe redirections for npm audit
-    const allowedRedirections = command.includes('2>/dev/null') && 
-      (command.includes('git diff') || command.includes('echo'));
-    
-    if (!allowedRedirections) {
-      for (const pattern of dangerousPatterns) {
-        if (pattern.test(command)) {
-          throw new Error(`Potentially dangerous command pattern detected: ${command}`);
+  safeExecSync(command, args = [], options = {}) {
+    // Support both old string format and new array format for gradual migration
+    if (typeof command === 'string' && args.length === 0) {
+      // Legacy string command - perform strict validation
+      if (!command || typeof command !== 'string') {
+        throw new Error('Invalid command');
+      }
+      
+      // Prevent command injection by checking for dangerous patterns
+      const dangerousPatterns = [
+        /[;&|`$()]/,  // Command separators and substitution
+        /\.\.\//,     // Path traversal
+        /^sudo\s/,    // Privilege escalation
+        /rm\s+-rf/,   // Dangerous file operations
+        />\s*\/dev\/null\s*2>&1/,  // Output redirection (already handled in npm commands)
+      ];
+      
+      // Allow some safe redirections for npm audit
+      const allowedRedirections = command.includes('2>/dev/null') && 
+        (command.includes('git diff') || command.includes('echo'));
+      
+      if (!allowedRedirections) {
+        for (const pattern of dangerousPatterns) {
+          if (pattern.test(command)) {
+            throw new Error(`Potentially dangerous command pattern detected: ${command}`);
+          }
         }
       }
-    }
-    
-    try {
-      return execSync(command, {
-        encoding: 'utf8',
-        timeout: 30000, // 30 second timeout
-        maxBuffer: 1024 * 1024, // 1MB max buffer
-        stdio: ['ignore', 'pipe', 'pipe'], // Prevent stdin input
-        ...options
+      
+      try {
+        return execSync(command, {
+          encoding: 'utf8',
+          timeout: 30000, // 30 second timeout
+          maxBuffer: 1024 * 1024, // 1MB max buffer
+          stdio: ['ignore', 'pipe', 'pipe'], // Prevent stdin input
+          ...options
+        });
+      } catch (error) {
+        console.warn(`Command failed: ${command}`);
+        console.warn(`Error: ${error.message}`);
+        throw error;
+      }
+    } else {
+      // New parameterized format - safer
+      if (!Array.isArray(args)) {
+        throw new Error('Arguments must be an array');
+      }
+      
+      // Validate command name
+      if (!/^[a-zA-Z0-9_-]+$/.test(command)) {
+        throw new Error(`Invalid command name: ${command}`);
+      }
+      
+      // Validate all arguments
+      args.forEach(arg => {
+        if (typeof arg !== 'string') {
+          throw new Error(`Invalid argument type: ${typeof arg}`);
+        }
+        // Basic validation - no command injection characters
+        if (/[;&|`$()]/.test(arg)) {
+          throw new Error(`Potentially dangerous argument: ${arg}`);
+        }
       });
-    } catch (error) {
-      console.warn(`Command failed: ${command}`);
-      console.warn(`Error: ${error.message}`);
-      throw error;
+      
+      const fullCommand = `${command} ${args.join(' ')}`;
+      
+      try {
+        return execSync(fullCommand, {
+          encoding: 'utf8',
+          timeout: 30000, // 30 second timeout
+          maxBuffer: 1024 * 1024, // 1MB max buffer
+          stdio: ['ignore', 'pipe', 'pipe'], // Prevent stdin input
+          ...options
+        });
+      } catch (error) {
+        console.warn(`Command failed: ${fullCommand}`);
+        console.warn(`Error: ${error.message}`);
+        throw error;
+      }
     }
   }
 
@@ -158,7 +198,7 @@ class ContextCollector {
     // Get PR details via GitHub API if available
     if (this.token) {
       try {
-        const prData = this.safeExecSync(`gh api repos/${this.repository}/pulls/${this.prNumber}`, {
+        const prData = this.safeExecSync('gh', ['api', `repos/${this.repository}/pulls/${this.prNumber}`], {
           env: { ...process.env, GH_TOKEN: this.token }
         });
         
@@ -204,10 +244,10 @@ class ContextCollector {
     
     try {
       // Get commit list using validated SHAs
-      const commits = this.safeExecSync(`git log --oneline ${this.baseSha}..${this.headSha}`);
+      const commits = this.safeExecSync('git', ['log', '--oneline', `${this.baseSha}..${this.headSha}`]);
       
       // Get detailed commit info using validated SHAs
-      const commitDetails = this.safeExecSync(`git log --format="%H|%an|%ae|%ad|%s|%b" --date=iso ${this.baseSha}..${this.headSha}`);
+      const commitDetails = this.safeExecSync('git', ['log', '--format=%H|%an|%ae|%ad|%s|%b', '--date=iso', `${this.baseSha}..${this.headSha}`]);
       
       // Analyze commit messages for conventional commits
       const conventionalCommits = this.analyzeConventionalCommits(commits);
@@ -273,13 +313,13 @@ class ContextCollector {
     
     try {
       // Get file change status using validated SHAs
-      const fileStatus = this.safeExecSync(`git diff --name-status ${this.baseSha}..${this.headSha}`);
+      const fileStatus = this.safeExecSync('git', ['diff', '--name-status', `${this.baseSha}..${this.headSha}`]);
       
       // Get diff statistics using validated SHAs
-      const diffStats = this.safeExecSync(`git diff --stat ${this.baseSha}..${this.headSha}`);
+      const diffStats = this.safeExecSync('git', ['diff', '--stat', `${this.baseSha}..${this.headSha}`]);
       
       // Analyze file types using validated SHAs
-      const changedFiles = this.safeExecSync(`git diff --name-only ${this.baseSha}..${this.headSha}`);
+      const changedFiles = this.safeExecSync('git', ['diff', '--name-only', `${this.baseSha}..${this.headSha}`]);
       const fileTypes = this.analyzeFileTypes(changedFiles);
       
       // Check for critical file changes
@@ -354,7 +394,7 @@ class ContextCollector {
     
     try {
       // Get check runs for the head SHA
-      const checkRuns = this.safeExecSync(`gh api repos/${this.repository}/commits/${this.headSha}/check-runs`, {
+      const checkRuns = this.safeExecSync('gh', ['api', `repos/${this.repository}/commits/${this.headSha}/check-runs`], {
         env: { ...process.env, GH_TOKEN: this.token }
       });
       
@@ -391,8 +431,7 @@ class ContextCollector {
     
     try {
       // Get PR review comments from Claude
-      const reviewsCmd = `gh api repos/${this.repository}/pulls/${this.prNumber}/reviews`;
-      const reviews = this.safeExecSync(reviewsCmd, {
+      const reviews = this.safeExecSync('gh', ['api', `repos/${this.repository}/pulls/${this.prNumber}/reviews`], {
         env: { ...process.env, GH_TOKEN: this.token }
       });
       
@@ -405,8 +444,7 @@ class ContextCollector {
       this.writeContextFile('claude-review.json', JSON.stringify(claudeReviews, null, 2));
       
       // Get issue comments from Claude
-      const commentsCmd = `gh api repos/${this.repository}/issues/${this.prNumber}/comments`;
-      const comments = this.safeExecSync(commentsCmd, {
+      const comments = this.safeExecSync('gh', ['api', `repos/${this.repository}/issues/${this.prNumber}/comments`], {
         env: { ...process.env, GH_TOKEN: this.token }
       });
       
@@ -477,7 +515,7 @@ class ContextCollector {
       let analysis = `=== SECURITY ANALYSIS ===\n\n`;
       
       // Check for potential secrets in diff
-      const diff = this.safeExecSync(`git diff ${this.baseSha}..${this.headSha}`);
+      const diff = this.safeExecSync('git', ['diff', `${this.baseSha}..${this.headSha}`]);
       const secretPatterns = [
         /api[_-]?key/i,
         /password/i,
@@ -578,7 +616,7 @@ class ContextCollector {
     
     try {
       // Look for test files in the changes
-      const changedFiles = this.safeExecSync(`git diff --name-only ${this.baseSha}..${this.headSha}`);
+      const changedFiles = this.safeExecSync('git', ['diff', '--name-only', `${this.baseSha}..${this.headSha}`]);
       const testFiles = changedFiles.split('\n').filter(file => 
         /\.(test|spec)\.(ts|js|tsx|jsx)$/.test(file) || 
         /test|spec|__tests__/.test(file)
@@ -618,7 +656,7 @@ class ContextCollector {
     console.log('📊 Analyzing code complexity...');
     
     try {
-      const changedFiles = this.safeExecSync(`git diff --name-only ${this.baseSha}..${this.headSha}`)
+      const changedFiles = this.safeExecSync('git', ['diff', '--name-only', `${this.baseSha}..${this.headSha}`])
         .split('\n')
         .filter(file => file.trim() && /\.(ts|js|tsx|jsx)$/.test(file));
       
@@ -630,7 +668,7 @@ class ContextCollector {
       
       changedFiles.forEach(file => {
         try {
-          const diff = this.safeExecSync(`git diff ${this.baseSha}..${this.headSha} -- "${file}"`);
+          const diff = this.safeExecSync('git', ['diff', `${this.baseSha}..${this.headSha}`, '--', file]);
           const added = (diff.match(/^\+[^+]/gm) || []).length;
           const removed = (diff.match(/^-[^-]/gm) || []).length;
           
