@@ -22,9 +22,8 @@ jobs:
   ai-merge-decision:
     runs-on: ubuntu-latest
     # Run automatically when PR is updated - no needs dependency since jobs are in different workflows
-    
     # Permissions inherited from workflow level, no need to duplicate
-      
+    
     steps:
       - name: Wait for required CI workflows to complete
         env:
