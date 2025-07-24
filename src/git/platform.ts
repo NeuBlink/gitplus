@@ -17,10 +17,12 @@ export interface PlatformCapabilities {
 export class PlatformManager {
   private platform: Platform;
   private remoteURL: string;
+  private repositoryPath: string;
 
-  constructor(platform: Platform, remoteURL: string) {
+  constructor(platform: Platform, remoteURL: string, repositoryPath: string) {
     this.platform = platform;
     this.remoteURL = remoteURL;
+    this.repositoryPath = repositoryPath;
   }
 
   /**
@@ -117,7 +119,7 @@ export class PlatformManager {
     }
 
     try {
-      const { stdout } = await execAsync(command);
+      const { stdout } = await execAsync(command, { cwd: this.repositoryPath });
       const prURL = stdout.trim();
       
       // Extract PR number from URL
@@ -162,7 +164,7 @@ export class PlatformManager {
     }
 
     try {
-      const { stdout } = await execAsync(command);
+      const { stdout } = await execAsync(command, { cwd: this.repositoryPath });
       const mrURL = stdout.trim();
       
       // Extract MR number from URL
@@ -218,7 +220,7 @@ export class PlatformManager {
    */
   private async isGitHubCLIAvailable(): Promise<boolean> {
     try {
-      await execAsync('gh --version');
+      await execAsync('gh --version', { cwd: this.repositoryPath });
       // TODO: Check authentication status
       return true;
     } catch {
@@ -231,7 +233,7 @@ export class PlatformManager {
    */
   private async isGitLabCLIAvailable(): Promise<boolean> {
     try {
-      await execAsync('glab --version');
+      await execAsync('glab --version', { cwd: this.repositoryPath });
       // TODO: Check authentication status
       return true;
     } catch {

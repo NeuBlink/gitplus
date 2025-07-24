@@ -1210,4 +1210,11 @@ export class GitClient {
       warnings
     };
   }
+
+  /**
+   * Get the working directory path
+   */
+  getWorkingDirectory(): string {
+    return this.workingDirectory;
+  }
 }

@@ -11,15 +11,18 @@ describe('PlatformManager', () => {
 
   describe('GitHub Platform', () => {
     beforeEach(() => {
-      platformManager = new PlatformManager(Platform.GitHub, 'https://github.com/user/repo.git');
+      platformManager = new PlatformManager(Platform.GitHub, 'https://github.com/user/repo.git', '/test/repo');
       jest.clearAllMocks();
     });
 
     it('should report GitHub CLI capabilities when available', async () => {
       const { exec } = require('child_process');
-      exec.mockImplementation((cmd: string, callback: Function) => {
+      exec.mockImplementation((cmd: string, options: any, callback: Function) => {
+        if (typeof options === 'function') {
+          callback = options;
+        }
         if (cmd.includes('gh --version')) {
-          callback(null, { stdout: 'gh version 2.0.0' });
+          callback(null, { stdout: 'gh version 2.0.0', stderr: '' });
         }
       });
 
@@ -31,7 +34,10 @@ describe('PlatformManager', () => {
 
     it('should report no capabilities when GitHub CLI unavailable', async () => {
       const { exec } = require('child_process');
-      exec.mockImplementation((cmd: string, callback: Function) => {
+      exec.mockImplementation((cmd: string, options: any, callback: Function) => {
+        if (typeof options === 'function') {
+          callback = options;
+        }
         callback(new Error('Command not found'));
       });
 
@@ -43,15 +49,18 @@ describe('PlatformManager', () => {
 
   describe('GitLab Platform', () => {
     beforeEach(() => {
-      platformManager = new PlatformManager(Platform.GitLab, 'https://gitlab.com/user/repo.git');
+      platformManager = new PlatformManager(Platform.GitLab, 'https://gitlab.com/user/repo.git', '/test/repo');
       jest.clearAllMocks();
     });
 
     it('should report GitLab CLI capabilities when available', async () => {
       const { exec } = require('child_process');
-      exec.mockImplementation((cmd: string, callback: Function) => {
+      exec.mockImplementation((cmd: string, options: any, callback: Function) => {
+        if (typeof options === 'function') {
+          callback = options;
+        }
         if (cmd.includes('glab --version')) {
-          callback(null, { stdout: 'glab version 1.0.0' });
+          callback(null, { stdout: 'glab version 1.0.0', stderr: '' });
         }
       });
 
@@ -64,7 +73,7 @@ describe('PlatformManager', () => {
 
   describe('LocalOnly Platform', () => {
     beforeEach(() => {
-      platformManager = new PlatformManager(Platform.LocalOnly, '');
+      platformManager = new PlatformManager(Platform.LocalOnly, '', '/test/repo');
     });
 
     it('should report no capabilities for local-only repositories', async () => {

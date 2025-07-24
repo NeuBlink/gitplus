@@ -261,7 +261,7 @@ program
 
           // Phase 5: PR creation (if not --no-pr)
           if (!options.noPr) {
-            const platformManager = new PlatformManager(status.platform, status.remoteURL);
+            const platformManager = new PlatformManager(status.platform, status.remoteURL, gitClient.getWorkingDirectory());
             const capabilities = await platformManager.getCapabilities();
 
             if (capabilities.canCreatePR) {
