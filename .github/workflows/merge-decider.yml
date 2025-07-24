@@ -23,7 +23,8 @@ jobs:
   # AI-powered merge decision that waits for all CI checks to complete
   ai-merge-decision:
     runs-on: ubuntu-latest
-    # Run automatically when PR is updated - no needs dependency since jobs are in different workflows
+    # Only run for pull requests, skip for manual triggers
+    if: github.event_name == 'pull_request'
     # Permissions inherited from workflow level, no need to duplicate
     
     steps:
@@ -31,7 +32,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           echo "🔄 Waiting for CI workflows to complete..."
           echo "Current commit: $PR_HEAD_SHA"
@@ -62,19 +63,19 @@ jobs:
       - name: Collect comprehensive context for AI analysis
         id: collect-context
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
-          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          PR_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
-          PR_ADDITIONS: ${{ github.event.pull_request.additions }}
-          PR_DELETIONS: ${{ github.event.pull_request.deletions }}
-          PR_DRAFT: ${{ github.event.pull_request.draft }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '0' }}
+          PR_TITLE: ${{ github.event.pull_request.title || 'Manual Trigger' }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login || github.actor }}
+          PR_AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association || 'MEMBER' }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref || 'main' }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          PR_CHANGED_FILES: ${{ github.event.pull_request.changed_files || '0' }}
+          PR_ADDITIONS: ${{ github.event.pull_request.additions || '0' }}
+          PR_DELETIONS: ${{ github.event.pull_request.deletions || '0' }}
+          PR_DRAFT: ${{ github.event.pull_request.draft || 'false' }}
+          PR_BODY: ${{ github.event.pull_request.body || 'Manual trigger - no PR body' }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || 'HEAD~1' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           # Create context directory
           mkdir -p .github/context
@@ -127,7 +128,7 @@ jobs:
       - name: Collect CI workflow results from GitHub API
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           echo "=== CI WORKFLOW RESULTS ===" > .github/context/ci-results.txt
           echo "Collected from GitHub API for commit $PR_HEAD_SHA" >> .github/context/ci-results.txt
@@ -189,8 +190,8 @@ jobs:
       - name: Collect Claude Code review findings
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '0' }}
         run: |
           echo "=== CLAUDE CODE REVIEW ANALYSIS ===" > .github/context/claude-review-analysis.txt
           
@@ -280,8 +281,8 @@ jobs:
             - All workflows checked: CI, PR Checks, Claude Code Review
             
             **Claude Review Sentiment:** ${{ env.CLAUDE_SENTIMENT }}
-            **Target Branch:** ${{ github.event.pull_request.base.ref }}
-            **PR Author:** ${{ github.event.pull_request.user.login }} (${{ github.event.pull_request.author_association }})
+            **Target Branch:** ${{ github.event.pull_request.base.ref || 'main' }}
+            **PR Author:** ${{ github.event.pull_request.user.login || github.actor }} (${{ github.event.pull_request.author_association || 'MEMBER' }})
             
             ## Context Files Available
             
@@ -301,7 +302,7 @@ jobs:
             ```
             ## 🤖 AI Merge Decision: [PASS/FAIL]
             
-            **Target Branch:** ${{ github.event.pull_request.base.ref }}
+            **Target Branch:** ${{ github.event.pull_request.base.ref || 'main' }}
             **Decision Basis:** [Claude Code Review + CI Status / CI Status Only]  
             **Claude Review Sentiment:** ${{ env.CLAUDE_SENTIMENT }}
             
@@ -330,7 +331,7 @@ jobs:
             [Clear explanation of why this should/shouldn't merge, emphasizing how you weighted Claude Code review findings vs CI results]
             
             ---
-            *Decision made by Claude AI • Integrating expert Claude Code review • PR #${{ github.event.pull_request.number }}*
+            *Decision made by Claude AI • Integrating expert Claude Code review • PR #${{ github.event.pull_request.number || '0' }}*
             ```
             
             ## Decision Rules
@@ -359,7 +360,7 @@ jobs:
           fi
 
       - name: Update PR labels based on decision
-        if: always()
+        if: always() && github.event.pull_request.number
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -382,6 +383,11 @@ jobs:
             echo "✅ AI Merge Decision: APPROVED"
             echo "This PR has been approved by the AI merge decider and is ready to merge."
             echo "The AI analyzed Claude Code review findings and all CI results to make this decision."
+          elif [ "${{ needs.ai-merge-decision.result }}" = "skipped" ]; then
+            echo "⚠️ AI Merge Decision: SKIPPED"
+            echo "AI merge decider was skipped (likely due to manual trigger)."
+            echo "Manual review is required for this change."
+            exit 1
           else
             echo "❌ AI Merge Decision: REJECTED"  
             echo "This PR has been rejected by the AI merge decider."
