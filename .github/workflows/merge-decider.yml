@@ -85,7 +85,9 @@ jobs:
           
           # Get PR description
           echo "=== PR DESCRIPTION ===" >> .github/context/pr-info.txt
-          echo '${{ github.event.pull_request.body }}' >> .github/context/pr-info.txt
+          cat << 'EOF' >> .github/context/pr-info.txt
+${{ github.event.pull_request.body }}
+EOF
           echo "" >> .github/context/pr-info.txt
           
           # Collect commit information
