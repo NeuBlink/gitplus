@@ -105,30 +105,8 @@ export class ToolHandler {
       switch (name) {
         case 'ship':
           return await this.handleShip(args, gitClient!);
-        case 'commit':
-          return await this.handleCommit(args, gitClient!);
-        case 'analyze':
-          return await this.handleAnalyze(args, gitClient!);
-        case 'suggest':
-          return await this.handleSuggest(args, gitClient!);
-        case 'pr_draft':
-          return await this.handlePRDraft(args, gitClient!);
         case 'status':
           return await this.handleStatus(args, gitClient!);
-        case 'merge_local':
-          return await this.handleMergeLocal(args, gitClient!);
-        case 'sync':
-          return await this.handleSync(args);
-        case 'stash':
-          return await this.handleStash(args);
-        case 'reset':
-          return await this.handleReset(args);
-        case 'rebase':
-          return await this.handleRebase(args);
-        case 'recover':
-          return await this.handleRecover(args);
-        case 'validate':
-          return await this.handleValidate(args);
         case 'info':
           return await this.handleInfo(args);
         default:

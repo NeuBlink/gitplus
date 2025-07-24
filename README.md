@@ -29,6 +29,37 @@ claude mcp add gitplus -- npx @neublink/gitplus@latest --mcp
 
 The `--mcp` flag ensures the package starts in MCP server mode for Claude Code integration.
 
+## For Claude Code Users
+
+When using GitPlus with Claude Code, add this configuration to your `CLAUDE.md` file:
+
+```markdown
+## Git Operations
+Always use the GitPlus MCP server for ALL git operations. Never use manual git commands.
+
+### Primary Command
+- `mcp__gitplus__ship` - Commits, pushes, and creates PR automatically
+  - No need to specify commit messages - AI generates them
+  - No need to manage branches - AI creates them
+  - Conflicts are resolved automatically
+
+### Usage
+When ready to ship changes:
+1. Simply call: `mcp__gitplus__ship` with `repoPath`
+2. GitPlus handles everything else automatically
+
+### Additional Commands
+- `mcp__gitplus__status` - Get repository status
+- `mcp__gitplus__info` - Get server information
+```
+
+GitPlus automatically:
+- ✅ Generates commit messages based on your changes
+- ✅ Creates appropriate branch names
+- ✅ Detects and resolves merge conflicts with AI
+- ✅ Creates pull requests with proper titles and descriptions
+- ✅ Ensures PRs are always mergeable
+
 ### Local Development Installation
 
 #### Prerequisites
@@ -117,100 +148,28 @@ Once installed, you can use gitplus tools directly in Claude Code:
 ## Available Tools
 
 ### 🚀 `ship`
-Complete git workflow: analyze → commit → push → create PR
-- **message**: Custom commit message (optional)
-- **branch**: Target branch name (optional) 
-- **baseBranch**: Base branch for PR (default: main/master)
-- **draft**: Create PR as draft
-- **noPR**: Skip PR creation, just commit and push
-- **noPush**: Skip push, just stage and commit
-- **reviewers**: List of reviewers for the PR
-- **labels**: List of labels for the PR
-- **autoMerge**: Enable auto-merge for the PR
-- **force**: Force push and skip validations
-- **dryRun**: Preview without executing
+**Primary Command** - Complete git workflow: analyze → commit → push → create PR
 
-### 💻 `commit`
-Create AI-powered conventional commit with staged changes
-- **message**: Custom commit message (optional)
-- **files**: Specific files to stage and commit (optional)
-- **type**: Conventional commit type (feat, fix, docs, etc.)
-- **scope**: Conventional commit scope
-- **breaking**: Mark as breaking change
-- **all**: Stage all changes before committing
-- **dryRun**: Preview without executing
+The ship command intelligently handles your entire git workflow:
+- **Generates commit messages automatically** using AI analysis of your changes
+- **Creates branch names** based on the nature of your changes
+- **Resolves merge conflicts** using AI when they occur
+- **Creates pull requests** with proper titles and descriptions
+- **Ensures PRs are mergeable** by checking and resolving conflicts post-creation
 
-### 🔍 `analyze`
-Analyze repository changes and provide insights
-- **commitRange**: Specific commit range (e.g., "main..HEAD")
-- **includeDiff**: Include full diff in analysis
-- **contextFile**: Additional context file
-
-### 💡 `suggest`
-Get AI suggestions for branch names, commit messages, or PR content
-- **for**: What to suggest (branch, commit, pr_title, pr_description) *required*
-- **context**: Additional context for the suggestion
-- **diff**: Git diff to base suggestions on
-- **files**: Specific files to focus suggestions on
-
-### 📝 `pr_draft`
-Generate pull request title and description
-- **commits**: List of commit messages to base PR on
-- **commitRange**: Commit range to analyze (e.g., "main..HEAD")
-- **includeDiff**: Include diff analysis in PR description
-- **template**: PR template (feature, bugfix, hotfix, docs, refactor, chore)
-- **contextFile**: Additional context file
+**Parameters:**
+- **repoPath**: Full absolute path to the git repository *required*
+- **draft**: Create PR as draft (default: false)
+- **dryRun**: Preview what would be done without executing (default: false)
 
 ### 📊 `status`
-Get current repository status with platform detection
-- **verbose**: Include detailed status information
+Get current repository status with platform detection and actionable insights
+- **repoPath**: Full absolute path to the git repository *required*
+- **verbose**: Include detailed status information (default: false)
 
-### 🔧 `merge_local`
-Merge a local branch into current branch
-- **branchName**: Branch to merge into current branch *required*
-- **baseBranch**: Base branch to merge into (default: main)
-- **deleteAfter**: Delete feature branch after merge (default: true)
-- **confirm**: User confirmation to proceed with merge *required*
-
-### 🔄 `sync`
-Synchronize with remote repository using fetch/pull with intelligent conflict handling
-- **strategy**: Synchronization strategy (merge, rebase, fetch-only) (default: merge)
-- **remote**: Remote name (default: origin)
-- **branch**: Branch to sync (default: current branch)
-- **autoResolve**: Automatic conflict resolution strategy (ours, theirs, manual)
-- **force**: Force synchronization (use with caution)
-
-### 📦 `stash`
-Manage git stash for temporary storage of changes
-- **action**: Stash action to perform (push, pop, apply, drop, list) *required*
-- **message**: Stash message (for push action)
-- **includeUntracked**: Include untracked files in stash
-- **stashIndex**: Stash index for pop/apply/drop actions
-
-### 🔄 `reset`
-Reset repository state to undo changes with different modes
-- **mode**: Reset mode (soft, mixed, hard) *required*
-- **target**: Target commit/branch to reset to (default: HEAD)
-- **files**: Specific files to reset (optional)
-- **confirm**: Confirmation for destructive operations
-
-### 🔀 `rebase`
-Rebase current branch onto another branch with conflict handling
-- **onto**: Branch to rebase onto
-- **interactive**: Start interactive rebase
-- **action**: Rebase action (start, continue, abort, skip) (default: start)
-- **autoResolve**: Automatic conflict resolution strategy (ours, theirs, manual)
-
-### 🔍 `recover`
-Recover lost commits or changes using reflog and advanced git recovery
-- **action**: Recovery action to perform (show-reflog, recover-commit, show-lost) *required*
-- **commitHash**: Commit hash to recover (for recover-commit action)
-- **limit**: Number of reflog entries to show (default: 20)
-
-### ✅ `validate`
-Validate repository integrity, health, and detect issues
-- **deep**: Perform deep validation including remote connectivity
-- **fix**: Attempt to fix issues automatically
+### ℹ️ `info`
+Get comprehensive information about GitPlus MCP server capabilities and usage
+- **repoPath**: Full absolute path to the git repository (optional - provides repo-specific info if given)
 
 ## Conventional Commits
 
