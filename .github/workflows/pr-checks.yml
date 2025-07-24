@@ -59,8 +59,14 @@ jobs:
         
         # Check if this version would conflict with existing NPM releases
         if npm view @neublink/gitplus@$VERSION version 2>/dev/null; then
-          echo "⚠️ Warning: Version $VERSION already exists on NPM"
-          echo "You may need to bump the version before publishing"
+          echo "❌ ERROR: Version $VERSION already exists on NPM"
+          echo "Please bump the version in package.json before merging this PR"
+          echo ""
+          echo "To fix this:"
+          echo "1. Update version in package.json (e.g., 1.0.1 → 1.0.2)"
+          echo "2. Commit the version change"
+          echo "3. Push to update this PR"
+          exit 1
         else
           echo "✅ Version $VERSION is available for publishing"
         fi
