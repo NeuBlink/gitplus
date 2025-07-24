@@ -57,18 +57,63 @@ jobs:
           exit 1
         fi
         
-        # Check if this version would conflict with existing NPM releases
+        # Smart NPM version validation with suggestions
+        echo "🔍 Checking NPM registry for version conflicts..."
+        
+        # Get current latest version from NPM
+        LATEST_VERSION=$(npm view @neublink/gitplus version 2>/dev/null || echo "none")
+        echo "Current package.json version: $VERSION"
+        echo "Latest NPM version: $LATEST_VERSION"
+        
+        # Check if current version already exists
         if npm view @neublink/gitplus@$VERSION version 2>/dev/null; then
+          echo ""
           echo "❌ ERROR: Version $VERSION already exists on NPM"
-          echo "Please bump the version in package.json before merging this PR"
+          echo "Cannot publish duplicate versions."
+          echo ""
+          
+          if [ "$LATEST_VERSION" != "none" ]; then
+            # Parse version numbers for suggestions
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST_VERSION"
+            NEXT_PATCH="$MAJOR.$MINOR.$((PATCH + 1))"
+            NEXT_MINOR="$MAJOR.$((MINOR + 1)).0"
+            NEXT_MAJOR="$((MAJOR + 1)).0.0"
+            
+            echo "💡 Suggested version updates from $LATEST_VERSION:"
+            echo "   • Patch (bug fixes): $NEXT_PATCH"
+            echo "   • Minor (new features): $NEXT_MINOR"
+            echo "   • Major (breaking changes): $NEXT_MAJOR"
+          fi
+          
           echo ""
           echo "To fix this:"
-          echo "1. Update version in package.json (e.g., 1.0.1 → 1.0.2)"
+          echo "1. Update version in package.json to an available version"
           echo "2. Commit the version change"
           echo "3. Push to update this PR"
           exit 1
-        else
+          
+        elif [ "$LATEST_VERSION" != "none" ]; then
+          # Version doesn't exist, but validate it's a reasonable increment
+          # This is a basic semantic version comparison
+          IFS='.' read -r PKG_MAJOR PKG_MINOR PKG_PATCH <<< "$VERSION"
+          IFS='.' read -r NPM_MAJOR NPM_MINOR NPM_PATCH <<< "$LATEST_VERSION"
+          
+          # Convert to comparable numbers (assuming versions < 1000)
+          PKG_NUM=$((PKG_MAJOR * 1000000 + PKG_MINOR * 1000 + PKG_PATCH))
+          NPM_NUM=$((NPM_MAJOR * 1000000 + NPM_MINOR * 1000 + NPM_PATCH))
+          
+          if [ $PKG_NUM -le $NPM_NUM ]; then
+            echo ""
+            echo "⚠️  WARNING: Version $VERSION is not newer than latest NPM version $LATEST_VERSION"
+            echo "This might not be what you intended."
+            echo ""
+            echo "Consider using a higher version number."
+            # Don't fail, just warn - might be intentional
+          fi
+          
           echo "✅ Version $VERSION is available for publishing"
+        else
+          echo "✅ Version $VERSION is available for publishing (first publication)"
         fi
         
     - name: Check documentation
