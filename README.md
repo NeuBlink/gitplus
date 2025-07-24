@@ -5,11 +5,13 @@ Gitplus is a Model Context Protocol (MCP) server that brings AI-powered git auto
 ## Features
 
 🚀 **Complete Git Workflows**: One-command ship from changes to PR  
-💻 **Smart Commits**: AI-generated conventional commit messages  
-🔍 **Change Analysis**: Intelligent analysis of repository changes  
-💡 **AI Suggestions**: Smart suggestions for branches, commits, and PRs  
+💻 **Smart Commits**: AI-generated conventional commit messages with strict spec compliance  
+🔍 **Change Analysis**: Intelligent analysis of repository changes with breaking change detection  
+💡 **AI Suggestions**: Smart suggestions for branches, commits, and PRs following best practices  
 📝 **PR Drafting**: Auto-generated pull request titles and descriptions  
-📊 **Git Status**: Enhanced repository status with platform detection
+📊 **Git Status**: Enhanced repository status with platform detection  
+✅ **Commit Validation**: Real-time validation against Conventional Commits specification  
+🔧 **Auto-detection**: Automatic type/scope detection from file changes and diffs
 
 ## Quick Start
 
@@ -96,6 +98,63 @@ Generate pull request title and description
 Get current repository status with platform detection
 - **verbose**: Include detailed status information
 
+### 🔧 `merge_local`
+Merge a local branch into current branch
+- **branch**: Branch to merge into current branch *required*
+- **noFf**: Force merge commit (no fast-forward)
+- **squash**: Squash commits during merge
+- **dryRun**: Preview merge without executing
+
+## Conventional Commits
+
+Gitplus follows the [Conventional Commits](https://www.conventionalcommits.org/) specification strictly. Every commit message is:
+
+### ✅ **Validated** against the specification
+- Format: `type(scope): description`
+- Breaking changes: `type(scope)!: description`
+- Supported types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `perf`, `ci`, `build`
+
+### 🤖 **AI-Enhanced** with intelligent detection
+```bash
+# AI automatically detects:
+feat(auth): add OAuth2 login support        # New features
+fix(api): handle null response errors       # Bug fixes  
+docs: update installation guide             # Documentation
+build(deps): upgrade typescript to v5       # Dependencies
+refactor(utils): extract validation logic   # Code restructuring
+```
+
+### 🔍 **Smart Analysis** of your changes
+- **Type detection**: Analyzes file changes to suggest appropriate commit types
+- **Scope suggestion**: Infers scope from affected directories (api, components, utils, etc.)
+- **Breaking changes**: Automatically detects API changes and adds `!` notation
+- **Validation feedback**: Real-time validation with helpful error messages
+
+### Examples
+
+#### Feature with scope
+```
+feat(auth): add two-factor authentication
+
+Implements TOTP-based 2FA with QR code generation
+and backup codes for account recovery.
+
+Closes #156
+```
+
+#### Breaking change
+```
+feat(api)!: change user data structure
+
+BREAKING CHANGE: User objects now use `userId` instead of `id`.
+Migration guide available in docs/migration.md
+```
+
+#### Simple fix
+```
+fix(validation): handle empty email addresses
+```
+
 ## Architecture
 
 Gitplus is built with:
@@ -103,8 +162,40 @@ Gitplus is built with:
 - **MCP SDK**: Official Model Context Protocol SDK
 - **Zod**: Runtime type validation
 - **Node.js**: Cross-platform compatibility
+- **Conventional Commits**: Strict adherence to commit message standards
 
-## Local Development
+## Local Build and Usage
+
+### Prerequisites
+
+Before building and using gitplus locally, ensure you have:
+
+- **Node.js 16+**: Required runtime environment
+- **Claude CLI**: Install and authenticate with `claude auth login`
+  ```bash
+  # Verify Claude CLI is available and authenticated
+  claude --version
+  claude -p "test" --output-format json --model sonnet
+  ```
+- **Git repository**: A local git repository with changes to test
+- **Platform CLIs** (optional for enhanced functionality):
+  - **GitHub CLI**: `gh auth login` for GitHub repository features
+  - **GitLab CLI**: `glab auth login` for GitLab repository features
+
+### Environment Variables
+
+Configure gitplus behavior with these environment variables:
+
+```bash
+# AI Configuration
+export GITPLUS_MODEL="sonnet"                    # Claude model (default: sonnet)
+export GITPLUS_TIMEOUT="60000"                   # Timeout in milliseconds (default: 60000)
+export GITPLUS_CLAUDE_COMMAND="claude"           # Claude CLI command path (default: claude)
+```
+
+**Important**: AI is mandatory - gitplus will fail immediately if Claude CLI is not available or working.
+
+### Build and Install
 
 ```bash
 # Clone the repository
@@ -117,11 +208,91 @@ npm install
 # Build the project
 npm run build
 
-# Test the server
+# Link CLI globally for testing
+npm link
+```
+
+After linking, both `gitplus` and `gp` commands become available globally.
+
+### CLI Usage
+
+Once built and linked, you can use gitplus commands in any git repository:
+
+```bash
+# Navigate to your git repository
+cd /path/to/your/git/repo
+
+# Check repository status
+gitplus status --verbose
+gp status  # Short alias
+
+# Analyze changes with AI
+gitplus analyze --diff
+gp analyze  # Get AI insights on your changes
+
+# Generate AI commit message (dry run)
+gitplus commit --dry-run
+gp commit -d  # Preview AI-generated commit
+
+# Create actual commit with AI message
+gitplus commit --all
+gp commit -a  # Stage all changes and commit
+
+# Get AI suggestions
+gitplus suggest branch    # AI branch name suggestion
+gitplus suggest commit    # AI commit message suggestion
+gp suggest pr_title       # AI PR title suggestion
+
+# Complete ship workflow (dry run)
+gitplus ship --dry-run    # Preview full workflow
+gp ship --no-pr          # Commit and push without PR
+```
+
+### Available Commands
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `gitplus commit` | `gp commit` | AI-powered conventional commits |
+| `gitplus ship` | `gp ship` | Complete workflow: commit → push → PR |
+| `gitplus analyze` | `gp analyze` | AI analysis of repository changes |
+| `gitplus suggest <type>` | `gp suggest <type>` | AI suggestions for branch/commit/PR |
+| `gitplus status` | `gp status` | Enhanced git status with platform detection |
+
+Note: The CLI also supports all MCP tools when built and run locally.
+
+### Testing AI Integration
+
+The AI integration requires Claude CLI to be installed and authenticated. Test the AI functionality:
+
+```bash
+# Verify AI is working
+claude --version  # Should show Claude CLI version
+
+# Test AI with sample repository
+cd /tmp && mkdir test-repo && cd test-repo
+git init
+echo "console.log('Hello World');" > app.js
+git add app.js
+
+# Test AI commit generation
+gitplus commit --dry-run  # Should generate intelligent commit message
+
+# If AI fails, gitplus falls back to rule-based analysis
+```
+
+### Development Mode
+
+For active development:
+
+```bash
+# Run in development mode with auto-reload
+npm run dev
+
+# Test MCP server directly
 npm run start
 
-# Development mode
-npm run dev
+# Clean and rebuild
+npm run clean && npm run build
 ```
 
 ## Configuration
@@ -131,8 +302,9 @@ Gitplus works out-of-the-box with sensible defaults. For advanced users, configu
 ## Platform Support
 
 - ✅ **Local Git**: Works with any git repository
-- 🚧 **GitHub**: Platform detection and PR creation (coming soon)
-- 🚧 **GitLab**: Platform detection and MR creation (coming soon)
+- ✅ **GitHub**: Full platform detection and PR creation via GitHub CLI
+- ✅ **GitLab**: Full platform detection and MR creation via GitLab CLI
+- ✅ **Auto-detection**: Automatically detects platform from remote URL
 
 ## Contributing
 

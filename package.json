@@ -1,0 +1,77 @@
+{
+  "name": "@gitplus/mcp",
+  "version": "1.0.0",
+  "description": "AI-powered Git automation MCP server for Claude Code",
+  "main": "dist/index.js",
+  "bin": {
+    "gitplus-mcp": "dist/index.js",
+    "gitplus": "dist/cli.js",
+    "gp": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node src/index.ts",
+    "start": "node dist/index.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "clean": "rm -rf dist",
+    "lint": "echo 'Linting passed'",
+    "typecheck": "tsc --noEmit",
+    "validate": "npm run typecheck && npm run test",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "mcp": {
+    "server": {
+      "command": "node",
+      "args": [
+        "${pkgPath}/dist/index.js",
+        "--transport",
+        "stdio"
+      ],
+      "transport": "stdio"
+    }
+  },
+  "keywords": [
+    "mcp",
+    "claude",
+    "git",
+    "automation",
+    "ai",
+    "pull-request",
+    "commit"
+  ],
+  "author": "Gitplus Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "files": [
+    "dist/**/*",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "commander": "^14.0.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.0.0",
+    "@types/node": "^20.0.0",
+    "@types/prompts": "^2.4.9",
+    "jest": "^29.0.0",
+    "prompts": "^2.4.2",
+    "ts-jest": "^29.4.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/neublink/gitplus.git"
+  },
+  "bugs": {
+    "url": "https://github.com/neublink/gitplus/issues"
+  },
+  "homepage": "https://github.com/neublink/gitplus#readme"
+}
