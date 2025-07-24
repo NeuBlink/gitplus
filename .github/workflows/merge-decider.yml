@@ -1,9 +1,11 @@
 name: AI Merge Decider
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-    branches: [main, develop, 'release/*']
+  # Temporarily disabled for debugging - will re-enable after fixing issues
+  workflow_dispatch:
+  # pull_request:
+  #   types: [opened, synchronize, reopened]
+  #   branches: [main, develop, 'release/*']
 
 # Ensure only one merge decision runs per PR
 concurrency:
