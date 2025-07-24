@@ -152,7 +152,8 @@ export class ToolHandler {
       autoMerge = false,
       force = false,
       dryRun = false,
-      verbose = false
+      verbose = false,
+      repoPath
     } = args;
 
     const steps: string[] = [];
