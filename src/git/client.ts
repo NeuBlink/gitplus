@@ -538,10 +538,13 @@ export class GitClient {
   /**
    * Resolve conflicts by accepting a strategy for all files
    */
-  async resolveConflicts(strategy: 'ours' | 'theirs' | 'manual'): Promise<{
+  async resolveConflicts(strategy: 'ours' | 'theirs' | 'manual' | 'ai-smart' | 'ai-safe' | 'ai-review'): Promise<{
     success: boolean;
     resolvedFiles: string[];
     remainingConflicts: string[];
+    reasoning?: string;
+    confidence?: number;
+    warnings?: string[];
   }> {
     const conflictedFiles = await this.getConflictedFiles();
     
@@ -560,6 +563,12 @@ export class GitClient {
       };
     }
     
+    // Handle AI-powered strategies
+    if (strategy.startsWith('ai-')) {
+      return await this.resolveConflictsWithAI(strategy as 'ai-smart' | 'ai-safe' | 'ai-review', conflictedFiles);
+    }
+    
+    // Handle basic strategies (ours/theirs)
     for (const file of conflictedFiles) {
       try {
         const command = strategy === 'ours' 
@@ -578,6 +587,257 @@ export class GitClient {
       success: remainingConflicts.length === 0,
       resolvedFiles,
       remainingConflicts
+    };
+  }
+
+  /**
+   * Resolve conflicts using AI-powered strategies
+   */
+  private async resolveConflictsWithAI(
+    strategy: 'ai-smart' | 'ai-safe' | 'ai-review', 
+    conflictedFiles: string[]
+  ): Promise<{
+    success: boolean;
+    resolvedFiles: string[];
+    remainingConflicts: string[];
+    reasoning?: string;
+    confidence?: number;
+    warnings?: string[];
+  }> {
+    try {
+      // Import AIService dynamically to avoid circular dependencies
+      const { AIService } = await import('../ai/service');
+      const aiService = new AIService();
+      
+      // Check if AI is available
+      const isAvailable = await aiService.isAvailable();
+      if (!isAvailable) {
+        console.log('AI service not available, falling back to "ours" strategy');
+        return await this.fallbackToBasicStrategy(conflictedFiles, 'ours');
+      }
+      
+      // Extract conflict data
+      const conflictData = await this.extractConflictData(conflictedFiles);
+      
+      // Get AI analysis
+      const resolution = await aiService.analyzeAndResolveConflicts(conflictData);
+      
+      if (!resolution) {
+        console.log('AI conflict analysis failed, falling back to "ours" strategy');
+        return await this.fallbackToBasicStrategy(conflictedFiles, 'ours');
+      }
+      
+      // Apply strategy-specific logic
+      const shouldAutoResolve = this.shouldAutoResolve(strategy, resolution.confidence);
+      
+      if (!shouldAutoResolve || resolution.strategy === 'escalate') {
+        return {
+          success: false,
+          resolvedFiles: [],
+          remainingConflicts: conflictedFiles,
+          reasoning: resolution.reasoning,
+          confidence: resolution.confidence,
+          warnings: resolution.warnings
+        };
+      }
+      
+      // Apply AI resolution
+      const resolved = await this.applyAIResolution(resolution);
+      
+      return {
+        success: resolved.success,
+        resolvedFiles: resolved.resolvedFiles,
+        remainingConflicts: resolved.remainingConflicts,
+        reasoning: resolution.reasoning,
+        confidence: resolution.confidence,
+        warnings: resolution.warnings
+      };
+      
+    } catch (error) {
+      console.error('AI conflict resolution error:', error);
+      return await this.fallbackToBasicStrategy(conflictedFiles, 'ours');
+    }
+  }
+  
+  /**
+   * Determine if AI resolution should be automatically applied based on strategy and confidence
+   */
+  private shouldAutoResolve(strategy: string, confidence: number): boolean {
+    switch (strategy) {
+      case 'ai-smart':
+        return confidence >= 70; // Medium confidence threshold
+      case 'ai-safe':
+        return confidence >= 85; // High confidence threshold
+      case 'ai-review':
+        return false; // Always require manual review
+      default:
+        return false;
+    }
+  }
+  
+  /**
+   * Apply AI resolution to conflicted files
+   */
+  private async applyAIResolution(resolution: any): Promise<{
+    success: boolean;
+    resolvedFiles: string[];
+    remainingConflicts: string[];
+  }> {
+    const resolvedFiles: string[] = [];
+    const remainingConflicts: string[] = [];
+    
+    try {
+      // Write resolved content to files
+      const fs = await import('fs').then(m => m.promises);
+      
+      for (const resolvedFile of resolution.resolvedFiles) {
+        try {
+          await fs.writeFile(resolvedFile.path, resolvedFile.content, 'utf8');
+          await this.add([resolvedFile.path]);
+          resolvedFiles.push(resolvedFile.path);
+        } catch (error) {
+          console.error(`Failed to apply resolution to ${resolvedFile.path}:`, error);
+          remainingConflicts.push(resolvedFile.path);
+        }
+      }
+      
+      // Add any unresolved files to remaining conflicts
+      remainingConflicts.push(...resolution.unresolved);
+      
+      return {
+        success: remainingConflicts.length === 0,
+        resolvedFiles,
+        remainingConflicts
+      };
+      
+    } catch (error) {
+      console.error('Failed to apply AI resolution:', error);
+      return {
+        success: false,
+        resolvedFiles,
+        remainingConflicts: resolution.resolvedFiles.map((f: any) => f.path).concat(resolution.unresolved)
+      };
+    }
+  }
+  
+  /**
+   * Extract detailed conflict data for AI analysis
+   */
+  private async extractConflictData(conflictedFiles: string[]): Promise<any> {
+    const fs = await import('fs').then(m => m.promises);
+    const path = await import('path');
+    
+    const conflictSections = [];
+    const commits = await this.getCommitHistory(5);
+    const currentBranch = await this.getCurrentBranch();
+    const baseBranch = await this.getBaseBranch();
+    
+    for (const file of conflictedFiles) {
+      try {
+        const content = await fs.readFile(file, 'utf8');
+        const sections = this.parseConflictMarkers(content, file);
+        conflictSections.push(...sections);
+      } catch (error) {
+        console.error(`Failed to read conflict file ${file}:`, error);
+      }
+    }
+    
+    return {
+      files: conflictedFiles,
+      conflictSections,
+      branch: currentBranch,
+      baseBranch,
+      commits: commits.map(c => ({
+        hash: c.hash,
+        message: c.message,
+        author: c.author
+      })),
+      fileTypes: conflictedFiles.map(f => path.extname(f)).filter(ext => ext)
+    };
+  }
+  
+  /**
+   * Parse git conflict markers in file content
+   */
+  private parseConflictMarkers(content: string, filePath: string): any[] {
+    const lines = content.split('\n');
+    const sections = [];
+    let currentSection: any = null;
+    let lineNumber = 0;
+    
+    for (const line of lines) {
+      lineNumber++;
+      
+      if (line.startsWith('<<<<<<<')) {
+        // Start of conflict
+        currentSection = {
+          file: filePath,
+          startLine: lineNumber,
+          oursContent: '',
+          theirsContent: '',
+          context: ''
+        };
+      } else if (line === '=======' && currentSection) {
+        // Switch from ours to theirs
+        currentSection.inTheirs = true;
+      } else if (line.startsWith('>>>>>>>') && currentSection) {
+        // End of conflict
+        currentSection.endLine = lineNumber;
+        
+        // Add context around the conflict (5 lines before and after)
+        const contextStart = Math.max(0, currentSection.startLine - 6);
+        const contextEnd = Math.min(lines.length, currentSection.endLine + 5);
+        currentSection.context = lines.slice(contextStart, contextEnd).join('\n');
+        
+        sections.push(currentSection);
+        currentSection = null;
+      } else if (currentSection) {
+        // Add content to current section
+        if (currentSection.inTheirs) {
+          currentSection.theirsContent += line + '\n';
+        } else {
+          currentSection.oursContent += line + '\n';
+        }
+      }
+    }
+    
+    return sections;
+  }
+  
+  /**
+   * Fallback to basic conflict resolution strategy
+   */
+  private async fallbackToBasicStrategy(
+    conflictedFiles: string[], 
+    strategy: 'ours' | 'theirs'
+  ): Promise<{
+    success: boolean;
+    resolvedFiles: string[];
+    remainingConflicts: string[];
+    reasoning?: string;
+  }> {
+    const resolvedFiles: string[] = [];
+    const remainingConflicts: string[] = [];
+    
+    for (const file of conflictedFiles) {
+      try {
+        const command = strategy === 'ours' 
+          ? `checkout --ours "${file}"` 
+          : `checkout --theirs "${file}"`;
+        
+        await this.executeGitCommand(command);
+        await this.add([file]);
+        resolvedFiles.push(file);
+      } catch (error) {
+        remainingConflicts.push(file);
+      }
+    }
+    
+    return {
+      success: remainingConflicts.length === 0,
+      resolvedFiles,
+      remainingConflicts,
+      reasoning: `Fallback to ${strategy} strategy (AI unavailable)`
     };
   }
 

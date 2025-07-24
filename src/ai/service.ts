@@ -45,6 +45,45 @@ export interface ComprehensiveAnalysis {
   pr: PRSuggestion;
 }
 
+export interface ConflictData {
+  files: string[];
+  conflictSections: ConflictSection[];
+  branch: string;
+  baseBranch: string;
+  commits: Array<{
+    hash: string;
+    message: string;
+    author: string;
+  }>;
+  fileTypes: string[];
+}
+
+export interface ConflictSection {
+  file: string;
+  startLine: number;
+  endLine: number;
+  oursContent: string;
+  theirsContent: string;
+  baseContent?: string;
+  context: string;
+}
+
+export interface ConflictResolution {
+  strategy: 'auto' | 'manual' | 'escalate';
+  resolvedFiles: ResolvedFile[];
+  unresolved: string[];
+  reasoning: string;
+  confidence: number;
+  warnings: string[];
+}
+
+export interface ResolvedFile {
+  path: string;
+  content: string;
+  changes: string;
+  reasoning: string;
+}
+
 export class AIService {
   private claudeCommand = process.env.GITPLUS_CLAUDE_COMMAND || '/Users/krysp/.nvm/versions/node/v23.9.0/bin/claude';
   private defaultModel = process.env.GITPLUS_MODEL || 'sonnet';
@@ -643,6 +682,142 @@ CRITICAL: Return ONLY the JSON object above with your analysis. Do NOT include m
     } catch (parseError) {
       console.error('Failed to parse AI response:', parseError instanceof Error ? parseError.message : 'Unknown error');
       console.log('Raw response content:', response.content.substring(0, 1000));
+      return null;
+    }
+  }
+
+  /**
+   * Analyze and resolve merge conflicts using AI
+   */
+  async analyzeAndResolveConflicts(conflictData: ConflictData): Promise<ConflictResolution | null> {
+    try {
+      const prompt = `You are an expert software engineer with deep knowledge of git merge conflicts and code semantics. Analyze the following merge conflicts and provide intelligent resolution.
+
+CONFLICT CONTEXT:
+- Branch: ${conflictData.branch} merging into ${conflictData.baseBranch}
+- Files: ${conflictData.files.join(', ')}
+- File types: ${conflictData.fileTypes.join(', ')}
+- Recent commits:
+${conflictData.commits.map(c => `  - ${c.hash.slice(0, 8)}: ${c.message} (${c.author})`).join('\n')}
+
+CONFLICT SECTIONS:
+${conflictData.conflictSections.map(section => `
+File: ${section.file}
+Lines: ${section.startLine}-${section.endLine}
+
+<<<<<<< HEAD (ours - ${conflictData.baseBranch})
+${section.oursContent}
+=======
+${section.theirsContent}
+>>>>>>> ${conflictData.branch}
+
+Context around conflict:
+${section.context}
+`).join('\n---\n')}
+
+RESOLUTION GUIDELINES:
+1. SEMANTIC ANALYSIS: Understand the purpose and functionality of each conflicting change
+2. COMPATIBILITY: Preserve functionality from both sides when possible
+3. SAFETY: Flag high-risk conflicts that could break functionality
+4. CODE QUALITY: Maintain consistency, style, and best practices
+5. BUSINESS LOGIC: Prioritize preserving critical business functionality
+
+CONFIDENCE LEVELS:
+- HIGH (90-100%): Simple, non-overlapping changes that can be safely merged
+- MEDIUM (70-89%): Compatible changes with minor complexity
+- LOW (50-69%): Complex changes requiring careful analysis
+- ESCALATE (<50%): High-risk conflicts requiring human review
+
+RESPONSE FORMAT:
+Return a JSON object with this exact structure:
+{
+  "strategy": "auto" | "manual" | "escalate",
+  "confidence": 0-100,
+  "reasoning": "Detailed explanation of the analysis and decisions",
+  "resolvedFiles": [
+    {
+      "path": "filename",
+      "content": "complete resolved file content",
+      "changes": "summary of what was changed",
+      "reasoning": "why this resolution was chosen"
+    }
+  ],
+  "unresolved": ["files that need manual resolution"],
+  "warnings": ["potential issues or things to watch out for"]
+}
+
+IMPORTANT:
+- If confidence < 70%, use "escalate" strategy
+- For "auto" strategy, provide complete resolved file content
+- For "escalate" strategy, explain what makes the conflict complex
+- Always prioritize code safety over convenience`;
+
+      const response = await this.executeClaudeCommand(prompt, {
+        maxTokens: 8192,
+        outputFormat: 'json'
+      });
+
+      if (!response.success) {
+        console.error('AI conflict analysis failed:', response.error);
+        return null;
+      }
+
+      try {
+        // Parse the response similar to other AI methods
+        let actualContent = response.content;
+        
+        // Handle Claude CLI wrapper responses
+        try {
+          const wrapper = JSON.parse(response.content);
+          if (wrapper.type === 'result' && wrapper.subtype === 'success' && wrapper.result) {
+            actualContent = wrapper.result;
+          }
+        } catch {
+          // Not a wrapper, use content directly
+        }
+        
+        // Clean up the content
+        let jsonContent = actualContent.trim();
+        
+        // Remove markdown code blocks if present
+        const codeBlockMatch = jsonContent.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (codeBlockMatch && codeBlockMatch[1]) {
+          jsonContent = codeBlockMatch[1].trim();
+        }
+        
+        // Find JSON boundaries
+        const jsonStart = jsonContent.indexOf('{');
+        const jsonEnd = jsonContent.lastIndexOf('}');
+        
+        if (jsonStart === -1 || jsonEnd === -1 || jsonStart >= jsonEnd) {
+          throw new Error('No valid JSON object found in AI response');
+        }
+        
+        jsonContent = jsonContent.substring(jsonStart, jsonEnd + 1);
+        const parsed = JSON.parse(jsonContent);
+        
+        // Validate the response structure
+        if (!parsed.strategy || !parsed.confidence || !parsed.reasoning) {
+          throw new Error('AI response missing required fields');
+        }
+        
+        return {
+          strategy: parsed.strategy,
+          resolvedFiles: parsed.resolvedFiles || [],
+          unresolved: parsed.unresolved || [],
+          reasoning: parsed.reasoning,
+          confidence: parsed.confidence,
+          warnings: parsed.warnings || []
+        };
+        
+      } catch (parseError) {
+        console.error('Failed to parse AI conflict resolution:', parseError);
+        console.log('Raw response:', response.content.substring(0, 1000));
+        return null;
+      }
+      
+    } catch (error) {
+      console.error('AI conflict resolution failed:', error);
       return null;
     }
   }

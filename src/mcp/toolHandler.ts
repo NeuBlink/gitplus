@@ -286,19 +286,31 @@ export class ToolHandler {
               });
               
               if (!pullResult.success && pullResult.conflicts) {
-                // Auto-resolve conflicts if possible
+                // AI-powered conflict resolution for PR creation
                 steps.push(`⚠️ Conflicts detected in ${pullResult.conflicts.length} files`);
+                steps.push('🤖 Analyzing conflicts with AI...');
                 
-                const resolveResult = await gitClient.resolveConflicts('ours');
+                // Use AI-safe strategy for PR conflicts (high confidence required)
+                const resolveResult = await gitClient.resolveConflicts('ai-safe');
+                
                 if (resolveResult.success) {
                   await gitClient.continueMerge();
-                  steps.push(`✅ Auto-resolved conflicts using 'ours' strategy`);
+                  steps.push(`✅ AI resolved conflicts with ${resolveResult.confidence}% confidence`);
+                  if (resolveResult.reasoning) {
+                    steps.push(`💡 AI reasoning: ${resolveResult.reasoning}`);
+                  }
+                  if (resolveResult.warnings && resolveResult.warnings.length > 0) {
+                    steps.push(`⚠️ AI warnings: ${resolveResult.warnings.join(', ')}`);
+                  }
                 } else {
+                  // AI couldn't resolve or confidence too low
+                  const fallbackMsg = resolveResult.reasoning || 'AI unable to resolve conflicts safely';
+                  
                   return {
                     content: [
                       {
                         type: 'text',
-                        text: `⚠️ **Manual Conflict Resolution Required**\n\n${steps.join('\n')}\n\n**Conflicted Files:**\n${pullResult.conflicts.map(f => `• ${f}`).join('\n')}\n\n**To resolve:**\n1. Edit the conflicted files\n2. Stage resolved files: \`git add <files>\`\n3. Continue merge: \`git merge --continue\`\n4. Run ship again\n\n**Or use force=true to override (⚠️ may lose remote changes)**`,
+                        text: `⚠️ **AI Conflict Resolution Failed**\n\n${steps.join('\n')}\n\n**AI Analysis:**\n${fallbackMsg}\n${resolveResult.confidence ? `Confidence: ${resolveResult.confidence}%` : ''}\n\n**Conflicted Files:**\n${pullResult.conflicts.map(f => `• ${f}`).join('\n')}\n\n**Manual Resolution Required:**\n1. Edit the conflicted files\n2. Stage resolved files: \`git add <files>\`\n3. Continue merge: \`git merge --continue\`\n4. Run ship again\n\n**Or use force=true to override (⚠️ may lose remote changes)**\n\n💡 **AI Suggestions:**\n${resolveResult.warnings?.join('\n') || 'Use git tools or IDE merge features for complex conflicts'}`,
                       },
                     ],
                     isError: true,
@@ -358,11 +370,15 @@ export class ToolHandler {
                 try {
                   const pullResult = await gitClient.pull({ strategy: 'rebase' });
                   if (!pullResult.success && pullResult.conflicts) {
-                    const resolveResult = await gitClient.resolveConflicts('ours');
+                    steps.push('🤖 AI analyzing rebase conflicts...');
+                    
+                    // Use AI-smart strategy for push retry conflicts (medium confidence)
+                    const resolveResult = await gitClient.resolveConflicts('ai-smart');
                     if (resolveResult.success) {
                       await gitClient.rebase({ onto: '', continue: true });
-                      steps.push('✅ Resolved conflicts and rebased');
+                      steps.push(`✅ AI resolved rebase conflicts (${resolveResult.confidence}% confidence)`);
                     } else {
+                      steps.push(`⚠️ AI couldn't resolve conflicts: ${resolveResult.reasoning}`);
                       break; // Exit retry loop for manual resolution
                     }
                   }
