@@ -94,22 +94,74 @@ jobs:
           
         elif [ "$LATEST_VERSION" != "none" ]; then
           # Version doesn't exist, but validate it's a reasonable increment
-          # This is a basic semantic version comparison
-          IFS='.' read -r PKG_MAJOR PKG_MINOR PKG_PATCH <<< "$VERSION"
-          IFS='.' read -r NPM_MAJOR NPM_MINOR NPM_PATCH <<< "$LATEST_VERSION"
+          echo "🔍 Comparing versions: $VERSION vs $LATEST_VERSION"
           
-          # Convert to comparable numbers (assuming versions < 1000)
-          PKG_NUM=$((PKG_MAJOR * 1000000 + PKG_MINOR * 1000 + PKG_PATCH))
-          NPM_NUM=$((NPM_MAJOR * 1000000 + NPM_MINOR * 1000 + NPM_PATCH))
+          # Safe version comparison function
+          compare_versions() {
+            local pkg_ver="$1"
+            local npm_ver="$2"
+            
+            # Extract base version (remove pre-release and build metadata)
+            local pkg_base=$(echo "$pkg_ver" | sed 's/-.*$//' | sed 's/+.*$//')
+            local npm_base=$(echo "$npm_ver" | sed 's/-.*$//' | sed 's/+.*$//')
+            
+            # Parse version components
+            IFS='.' read -r pkg_major pkg_minor pkg_patch <<< "$pkg_base"
+            IFS='.' read -r npm_major npm_minor npm_patch <<< "$npm_base"
+            
+            # Validate components are numeric and within safe limits
+            for component in "$pkg_major" "$pkg_minor" "$pkg_patch" "$npm_major" "$npm_minor" "$npm_patch"; do
+              # Check if component is numeric using case statement (more portable)
+              case "$component" in
+                ''|*[!0-9]*)
+                  echo "⚠️ Invalid version component: $component"
+                  return 2  # Cannot compare
+                  ;;
+              esac
+              if [ "$component" -ge 1000 ]; then
+                echo "⚠️ Version component >= 1000 not supported: $component"
+                return 2  # Cannot compare
+              fi
+            done
+            
+            # Safe arithmetic comparison (all components < 1000)
+            local pkg_num=$((pkg_major * 1000000 + pkg_minor * 1000 + pkg_patch))
+            local npm_num=$((npm_major * 1000000 + npm_minor * 1000 + npm_patch))
+            
+            if [ $pkg_num -gt $npm_num ]; then
+              return 0  # Package version is newer
+            elif [ $pkg_num -eq $npm_num ]; then
+              return 1  # Versions are equal
+            else
+              return 3  # Package version is older
+            fi
+          }
           
-          if [ $PKG_NUM -le $NPM_NUM ]; then
-            echo ""
-            echo "⚠️  WARNING: Version $VERSION is not newer than latest NPM version $LATEST_VERSION"
-            echo "This might not be what you intended."
-            echo ""
-            echo "Consider using a higher version number."
-            # Don't fail, just warn - might be intentional
-          fi
+          # Perform safe version comparison
+          compare_versions "$VERSION" "$LATEST_VERSION"
+          comparison_result=$?
+          
+          case $comparison_result in
+            0)
+              echo "✅ Version $VERSION is newer than $LATEST_VERSION"
+              ;;
+            1)
+              echo "⚠️ Version $VERSION equals latest NPM version $LATEST_VERSION"
+              echo "This might indicate the comparison logic needs review."
+              ;;
+            2)
+              echo "⚠️ Cannot compare versions (unsupported format or large numbers)"
+              echo "Skipping version order validation - manual review recommended"
+              ;;
+            3)
+              echo ""
+              echo "⚠️ WARNING: Version $VERSION is older than latest NPM version $LATEST_VERSION"
+              echo "This might not be what you intended."
+              echo ""
+              echo "Consider using a higher version number."
+              # Don't fail, just warn - might be intentional
+              ;;
+          esac
           
           echo "✅ Version $VERSION is available for publishing"
         else
