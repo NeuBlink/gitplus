@@ -32,6 +32,9 @@ async function main() {
     await server.start();
     
     console.error('✅ Gitplus MCP server started successfully');
+    
+    // Keep the process alive
+    process.stdin.resume();
   } catch (error) {
     console.error('❌ Failed to start gitplus MCP server:', error);
     process.exit(1);
@@ -50,7 +53,7 @@ process.on('uncaughtException', (error) => {
   process.exit(1);
 });
 
-// Graceful shutdown
+// Graceful shutdown - only exit on explicit signals
 process.on('SIGINT', () => {
   console.error('🛑 Received SIGINT, shutting down gracefully');
   process.exit(0);
