@@ -57,12 +57,115 @@ jobs:
           exit 1
         fi
         
-        # Check if this version would conflict with existing NPM releases
+        # Smart NPM version validation with suggestions
+        echo "🔍 Checking NPM registry for version conflicts..."
+        
+        # Get current latest version from NPM
+        LATEST_VERSION=$(npm view @neublink/gitplus version 2>/dev/null || echo "none")
+        echo "Current package.json version: $VERSION"
+        echo "Latest NPM version: $LATEST_VERSION"
+        
+        # Check if current version already exists
         if npm view @neublink/gitplus@$VERSION version 2>/dev/null; then
-          echo "⚠️ Warning: Version $VERSION already exists on NPM"
-          echo "You may need to bump the version before publishing"
-        else
+          echo ""
+          echo "❌ ERROR: Version $VERSION already exists on NPM"
+          echo "Cannot publish duplicate versions."
+          echo ""
+          
+          if [ "$LATEST_VERSION" != "none" ]; then
+            # Parse version numbers for suggestions
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST_VERSION"
+            NEXT_PATCH="$MAJOR.$MINOR.$((PATCH + 1))"
+            NEXT_MINOR="$MAJOR.$((MINOR + 1)).0"
+            NEXT_MAJOR="$((MAJOR + 1)).0.0"
+            
+            echo "💡 Suggested version updates from $LATEST_VERSION:"
+            echo "   • Patch (bug fixes): $NEXT_PATCH"
+            echo "   • Minor (new features): $NEXT_MINOR"
+            echo "   • Major (breaking changes): $NEXT_MAJOR"
+          fi
+          
+          echo ""
+          echo "To fix this:"
+          echo "1. Update version in package.json to an available version"
+          echo "2. Commit the version change"
+          echo "3. Push to update this PR"
+          exit 1
+          
+        elif [ "$LATEST_VERSION" != "none" ]; then
+          # Version doesn't exist, but validate it's a reasonable increment
+          echo "🔍 Comparing versions: $VERSION vs $LATEST_VERSION"
+          
+          # Safe version comparison function
+          compare_versions() {
+            local pkg_ver="$1"
+            local npm_ver="$2"
+            
+            # Extract base version (remove pre-release and build metadata)
+            local pkg_base=$(echo "$pkg_ver" | sed 's/-.*$//' | sed 's/+.*$//')
+            local npm_base=$(echo "$npm_ver" | sed 's/-.*$//' | sed 's/+.*$//')
+            
+            # Parse version components
+            IFS='.' read -r pkg_major pkg_minor pkg_patch <<< "$pkg_base"
+            IFS='.' read -r npm_major npm_minor npm_patch <<< "$npm_base"
+            
+            # Validate components are numeric and within safe limits
+            for component in "$pkg_major" "$pkg_minor" "$pkg_patch" "$npm_major" "$npm_minor" "$npm_patch"; do
+              # Check if component is numeric using case statement (more portable)
+              case "$component" in
+                ''|*[!0-9]*)
+                  echo "⚠️ Invalid version component: $component"
+                  return 2  # Cannot compare
+                  ;;
+              esac
+              if [ "$component" -ge 1000 ]; then
+                echo "⚠️ Version component >= 1000 not supported: $component"
+                return 2  # Cannot compare
+              fi
+            done
+            
+            # Safe arithmetic comparison (all components < 1000)
+            local pkg_num=$((pkg_major * 1000000 + pkg_minor * 1000 + pkg_patch))
+            local npm_num=$((npm_major * 1000000 + npm_minor * 1000 + npm_patch))
+            
+            if [ $pkg_num -gt $npm_num ]; then
+              return 0  # Package version is newer
+            elif [ $pkg_num -eq $npm_num ]; then
+              return 1  # Versions are equal
+            else
+              return 3  # Package version is older
+            fi
+          }
+          
+          # Perform safe version comparison
+          compare_versions "$VERSION" "$LATEST_VERSION"
+          comparison_result=$?
+          
+          case $comparison_result in
+            0)
+              echo "✅ Version $VERSION is newer than $LATEST_VERSION"
+              ;;
+            1)
+              echo "⚠️ Version $VERSION equals latest NPM version $LATEST_VERSION"
+              echo "This might indicate the comparison logic needs review."
+              ;;
+            2)
+              echo "⚠️ Cannot compare versions (unsupported format or large numbers)"
+              echo "Skipping version order validation - manual review recommended"
+              ;;
+            3)
+              echo ""
+              echo "⚠️ WARNING: Version $VERSION is older than latest NPM version $LATEST_VERSION"
+              echo "This might not be what you intended."
+              echo ""
+              echo "Consider using a higher version number."
+              # Don't fail, just warn - might be intentional
+              ;;
+          esac
+          
           echo "✅ Version $VERSION is available for publishing"
+        else
+          echo "✅ Version $VERSION is available for publishing (first publication)"
         fi
         
     - name: Check documentation
