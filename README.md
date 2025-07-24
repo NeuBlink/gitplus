@@ -29,6 +29,29 @@ claude mcp add gitplus -- npx @gitplus/mcp@latest
 
 ### Local Development Installation
 
+#### Prerequisites
+
+Before installing gitplus locally, ensure you have:
+
+- **Node.js 16+**: Required runtime environment
+- **Git**: For repository management
+- **Claude CLI**: Install and authenticate with `claude auth login`
+  ```bash
+  # Install Claude CLI (if not already installed)
+  npm install -g @anthropic-ai/claude-code
+  
+  # Verify Claude CLI is available and authenticated
+  claude --version
+  claude auth login
+  ```
+- **Platform CLIs** (optional for enhanced functionality):
+  - **GitHub CLI**: `gh auth login` for GitHub repository features
+  - **GitLab CLI**: `glab auth login` for GitLab repository features
+
+**Important**: AI functionality via Claude CLI is mandatory - gitplus will fail if Claude CLI is not available or properly authenticated.
+
+#### Installation Steps
+
 For development or testing before publication:
 
 ```bash
@@ -38,14 +61,34 @@ cd gitplus
 npm install
 npm run build
 
+# Fix file permissions (required after build)
+chmod +x dist/cli.js dist/index.js
+
 # Install CLI globally for command line usage
 npm link
 
-# Add to Claude Code as MCP server
-claude mcp add gitplus-local -- node $(pwd)/dist/index.js
+# Add to Claude Code as MCP server (using linked command)
+claude mcp add gitplus-local -- gitplus-mcp
 ```
 
-Now you can use gitplus tools in Claude Code and CLI commands globally!
+**Note**: The `gp` alias may conflict with existing shell aliases for `git push`. Use the `gitplus` command if `gp` doesn't work.
+
+### Verify Installation
+
+After setup, verify both interfaces work:
+
+**CLI Commands:**
+```bash
+gitplus --help          # Should show help menu
+gitplus status          # Should show repository status
+```
+
+**MCP Server:**
+```bash
+claude /mcp             # Should show gitplus-local as ✔ connected
+```
+
+Now you can use gitplus tools in Claude Code conversations and CLI commands globally!
 
 ### Usage in Claude Code
 
@@ -292,70 +335,72 @@ cd /path/to/your/git/repo
 
 # Check repository status
 gitplus status --verbose
-gp status  # Short alias
+gitplus status  # Or use 'gp' if it's not aliased to 'git push'
 
 # Analyze changes with AI
 gitplus analyze --diff
-gp analyze  # Get AI insights on your changes
+gitplus analyze  # Get AI insights on your changes
 
 # Generate AI commit message (dry run)
 gitplus commit --dry-run
-gp commit -d  # Preview AI-generated commit
+gitplus commit -d  # Preview AI-generated commit
 
 # Create actual commit with AI message
 gitplus commit --all
-gp commit -a  # Stage all changes and commit
+gitplus commit -a  # Stage all changes and commit
 
 # Get AI suggestions
 gitplus suggest branch    # AI branch name suggestion
 gitplus suggest commit    # AI commit message suggestion
-gp suggest pr_title       # AI PR title suggestion
+gitplus suggest pr_title  # AI PR title suggestion
 
 # Complete ship workflow (dry run)
 gitplus ship --dry-run    # Preview full workflow
-gp ship --no-pr          # Commit and push without PR
+gitplus ship --no-pr     # Commit and push without PR
 
 # Synchronize with remote
 gitplus sync --strategy merge    # Merge remote changes
-gp sync --strategy rebase        # Rebase on remote changes
+gitplus sync --strategy rebase   # Rebase on remote changes
 
 # Manage stash operations
 gitplus stash push -m "WIP: feature work"  # Create stash
 gitplus stash list                         # List all stashes
-gp stash pop                              # Apply and remove latest stash
+gitplus stash pop                         # Apply and remove latest stash
 
 # Safe repository resets
 gitplus reset mixed               # Reset index, keep working directory
-gp reset hard --confirm          # Hard reset (requires confirmation)
+gitplus reset hard --confirm     # Hard reset (requires confirmation)
 
 # Interactive rebasing
 gitplus rebase main               # Rebase current branch onto main
-gp rebase --action continue      # Continue interrupted rebase
+gitplus rebase --action continue # Continue interrupted rebase
 
 # Recover lost work
 gitplus recover show-reflog       # Show recent reflog entries
-gp recover recover-commit --commit abc123  # Recover specific commit
+gitplus recover recover-commit --commit abc123  # Recover specific commit
 
 # Repository validation
 gitplus validate --deep           # Deep repository health check
-gp validate --fix                # Attempt to fix issues automatically
+gitplus validate --fix           # Attempt to fix issues automatically
 ```
 
 ### Available Commands
 
 | Command | Alias | Description |
 |---------|-------|-------------|
-| `gitplus commit` | `gp commit` | AI-powered conventional commits |
-| `gitplus ship` | `gp ship` | Complete workflow: commit → push → PR |
-| `gitplus analyze` | `gp analyze` | AI analysis of repository changes |
-| `gitplus suggest <type>` | `gp suggest <type>` | AI suggestions for branch/commit/PR |
-| `gitplus status` | `gp status` | Enhanced git status with platform detection |
-| `gitplus sync` | `gp sync` | Synchronize with remote repository |
-| `gitplus stash <action>` | `gp stash <action>` | Manage git stash operations |
-| `gitplus reset <mode>` | `gp reset <mode>` | Reset repository state safely |
-| `gitplus rebase [onto]` | `gp rebase [onto]` | Interactive and automatic rebasing |
-| `gitplus recover <action>` | `gp recover <action>` | Recover lost commits using reflog |
-| `gitplus validate` | `gp validate` | Validate repository health and integrity |
+| `gitplus commit` | `gp commit`* | AI-powered conventional commits |
+| `gitplus ship` | `gp ship`* | Complete workflow: commit → push → PR |
+| `gitplus analyze` | `gp analyze`* | AI analysis of repository changes |
+| `gitplus suggest <type>` | `gp suggest <type>`* | AI suggestions for branch/commit/PR |
+| `gitplus status` | `gp status`* | Enhanced git status with platform detection |
+| `gitplus sync` | `gp sync`* | Synchronize with remote repository |
+| `gitplus stash <action>` | `gp stash <action>`* | Manage git stash operations |
+| `gitplus reset <mode>` | `gp reset <mode>`* | Reset repository state safely |
+| `gitplus rebase [onto]` | `gp rebase [onto]`* | Interactive and automatic rebasing |
+| `gitplus recover <action>` | `gp recover <action>`* | Recover lost commits using reflog |
+| `gitplus validate` | `gp validate`* | Validate repository health and integrity |
+
+*Note: `gp` alias may conflict with existing shell aliases for `git push`
 
 Note: The CLI also supports all MCP tools when built and run locally.
 
@@ -401,6 +446,57 @@ npm run clean && npm run build
 ## Configuration
 
 Gitplus works out-of-the-box with sensible defaults. For advanced users, configuration options will be added in future versions.
+
+## Troubleshooting
+
+### Common Issues
+
+#### `gp` Command Not Working
+**Issue**: `gp` command shows `git push` instead of gitplus commands.  
+**Solution**: Your shell has `gp` aliased to `git push`. Use `gitplus` instead of `gp` for all commands.
+
+#### MCP Server Connection Failed
+**Issue**: Claude Code shows gitplus-local as ✘ failed.  
+**Solutions**:
+1. Ensure files are executable: `chmod +x dist/cli.js dist/index.js`
+2. Rebuild the project: `npm run build`
+3. Remove and re-add MCP server:
+   ```bash
+   claude mcp remove gitplus-local
+   claude mcp add gitplus-local -- gitplus-mcp
+   ```
+
+#### CLI Commands Not Found
+**Issue**: `gitplus: command not found`  
+**Solutions**:
+1. Ensure npm link was successful: `npm link`
+2. Check if command exists: `which gitplus`
+3. Rebuild and relink:
+   ```bash
+   npm run build
+   chmod +x dist/cli.js dist/index.js
+   npm link
+   ```
+
+#### Permission Denied Errors
+**Issue**: `permission denied: /path/to/dist/index.js`  
+**Solution**: Files need execute permissions after build:
+```bash
+chmod +x dist/cli.js dist/index.js
+```
+
+#### AI Integration Not Working
+**Issue**: Commands fail with Claude CLI errors.  
+**Solutions**:
+1. Verify Claude CLI is installed and authenticated:
+   ```bash
+   claude --version
+   claude auth login
+   ```
+2. Test Claude CLI directly:
+   ```bash
+   claude -p "test" --output-format json --model sonnet
+   ```
 
 ## Platform Support
 
