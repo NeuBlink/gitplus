@@ -110,6 +110,12 @@ jobs:
         VERSION=$(node -p "require('./package.json').version")
         TEST_TAG="test-v$VERSION-pr-check"
         
+        # Check if the actual version tag already exists on remote
+        if git ls-remote --tags origin | grep -q "refs/tags/v$VERSION$"; then
+          echo "⚠️ Warning: Tag v$VERSION already exists on remote"
+          echo "Publishing this version may require manual tag cleanup"
+        fi
+        
         # Test that we can create and delete a test tag
         git tag "$TEST_TAG" 2>/dev/null || {
           echo "❌ Cannot create git tag"
