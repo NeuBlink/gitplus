@@ -53,12 +53,19 @@ jobs:
             - `## 🤖 Merge Decision: PASS` (if approved)  
             - `## 🤖 Merge Decision: FAIL` (if rejected)
             
-            Full format:
+            ## PR Information
+            The PR information is available in the environment variables:
+            - TARGET_BRANCH: The base branch this PR targets
+            - PR_AUTHOR: The username of the PR author
+            - PR_NUMBER: The PR number
+            
+            Use these values in your response format as shown below:
+            
             ```
             ## 🤖 Merge Decision: [PASS/FAIL]
             
-            **Target Branch:** $TARGET_BRANCH
-            **PR Author:** $PR_AUTHOR
+            **Target Branch:** [Use TARGET_BRANCH env var]
+            **PR Author:** [Use PR_AUTHOR env var]
             
             ### 🎯 Analysis Summary
             [Brief summary of your analysis]
@@ -67,7 +74,7 @@ jobs:
             [Clear explanation of why this should/shouldn't merge]
             
             ---
-            *Decision made by Claude AI • PR #$PR_NUMBER*
+            *Decision made by Claude AI • PR #[Use PR_NUMBER env var]*
             ```
         env:
           TARGET_BRANCH: ${{ toJSON(github.event.pull_request.base.ref) }}

@@ -198,7 +198,7 @@ class ContextCollector {
     // Get PR details via GitHub API if available
     if (this.token) {
       try {
-        const prData = this.safeExecSync('gh', ['api', `repos/${this.repository}/pulls/${this.prNumber}`], {
+        const prData = this.safeExecSync('gh', ['api', 'repos/' + this.repository + '/pulls/' + this.prNumber], {
           env: { ...process.env, GH_TOKEN: this.token }
         });
         
@@ -244,10 +244,10 @@ class ContextCollector {
     
     try {
       // Get commit list using validated SHAs
-      const commits = this.safeExecSync('git', ['log', '--oneline', `${this.baseSha}..${this.headSha}`]);
+      const commits = this.safeExecSync('git', ['log', '--oneline', this.baseSha + '..' + this.headSha]);
       
       // Get detailed commit info using validated SHAs
-      const commitDetails = this.safeExecSync('git', ['log', '--format=%H|%an|%ae|%ad|%s|%b', '--date=iso', `${this.baseSha}..${this.headSha}`]);
+      const commitDetails = this.safeExecSync('git', ['log', '--format=%H|%an|%ae|%ad|%s|%b', '--date=iso', this.baseSha + '..' + this.headSha]);
       
       // Analyze commit messages for conventional commits
       const conventionalCommits = this.analyzeConventionalCommits(commits);
@@ -313,13 +313,13 @@ class ContextCollector {
     
     try {
       // Get file change status using validated SHAs
-      const fileStatus = this.safeExecSync('git', ['diff', '--name-status', `${this.baseSha}..${this.headSha}`]);
+      const fileStatus = this.safeExecSync('git', ['diff', '--name-status', this.baseSha + '..' + this.headSha]);
       
       // Get diff statistics using validated SHAs
-      const diffStats = this.safeExecSync('git', ['diff', '--stat', `${this.baseSha}..${this.headSha}`]);
+      const diffStats = this.safeExecSync('git', ['diff', '--stat', this.baseSha + '..' + this.headSha]);
       
       // Analyze file types using validated SHAs
-      const changedFiles = this.safeExecSync('git', ['diff', '--name-only', `${this.baseSha}..${this.headSha}`]);
+      const changedFiles = this.safeExecSync('git', ['diff', '--name-only', this.baseSha + '..' + this.headSha]);
       const fileTypes = this.analyzeFileTypes(changedFiles);
       
       // Check for critical file changes
@@ -394,7 +394,7 @@ class ContextCollector {
     
     try {
       // Get check runs for the head SHA
-      const checkRuns = this.safeExecSync('gh', ['api', `repos/${this.repository}/commits/${this.headSha}/check-runs`], {
+      const checkRuns = this.safeExecSync('gh', ['api', 'repos/' + this.repository + '/commits/' + this.headSha + '/check-runs'], {
         env: { ...process.env, GH_TOKEN: this.token }
       });
       
@@ -431,7 +431,7 @@ class ContextCollector {
     
     try {
       // Get PR review comments from Claude
-      const reviews = this.safeExecSync('gh', ['api', `repos/${this.repository}/pulls/${this.prNumber}/reviews`], {
+      const reviews = this.safeExecSync('gh', ['api', 'repos/' + this.repository + '/pulls/' + this.prNumber + '/reviews'], {
         env: { ...process.env, GH_TOKEN: this.token }
       });
       
@@ -444,7 +444,7 @@ class ContextCollector {
       this.writeContextFile('claude-review.json', JSON.stringify(claudeReviews, null, 2));
       
       // Get issue comments from Claude
-      const comments = this.safeExecSync('gh', ['api', `repos/${this.repository}/issues/${this.prNumber}/comments`], {
+      const comments = this.safeExecSync('gh', ['api', 'repos/' + this.repository + '/issues/' + this.prNumber + '/comments'], {
         env: { ...process.env, GH_TOKEN: this.token }
       });
       
@@ -515,7 +515,7 @@ class ContextCollector {
       let analysis = `=== SECURITY ANALYSIS ===\n\n`;
       
       // Check for potential secrets in diff
-      const diff = this.safeExecSync('git', ['diff', `${this.baseSha}..${this.headSha}`]);
+      const diff = this.safeExecSync('git', ['diff', this.baseSha + '..' + this.headSha]);
       const secretPatterns = [
         /api[_-]?key/i,
         /password/i,
@@ -616,7 +616,7 @@ class ContextCollector {
     
     try {
       // Look for test files in the changes
-      const changedFiles = this.safeExecSync('git', ['diff', '--name-only', `${this.baseSha}..${this.headSha}`]);
+      const changedFiles = this.safeExecSync('git', ['diff', '--name-only', this.baseSha + '..' + this.headSha]);
       const testFiles = changedFiles.split('\n').filter(file => 
         /\.(test|spec)\.(ts|js|tsx|jsx)$/.test(file) || 
         /test|spec|__tests__/.test(file)
@@ -656,7 +656,7 @@ class ContextCollector {
     console.log('📊 Analyzing code complexity...');
     
     try {
-      const changedFiles = this.safeExecSync('git', ['diff', '--name-only', `${this.baseSha}..${this.headSha}`])
+      const changedFiles = this.safeExecSync('git', ['diff', '--name-only', this.baseSha + '..' + this.headSha])
         .split('\n')
         .filter(file => file.trim() && /\.(ts|js|tsx|jsx)$/.test(file));
       
@@ -668,7 +668,7 @@ class ContextCollector {
       
       changedFiles.forEach(file => {
         try {
-          const diff = this.safeExecSync('git', ['diff', `${this.baseSha}..${this.headSha}`, '--', file]);
+          const diff = this.safeExecSync('git', ['diff', this.baseSha + '..' + this.headSha, '--', file]);
           const added = (diff.match(/^\+[^+]/gm) || []).length;
           const removed = (diff.match(/^-[^-]/gm) || []).length;
           
@@ -709,7 +709,7 @@ class ContextCollector {
       // Check if package.json changed  
       let packageDiff;
       try {
-        packageDiff = this.safeExecSync('git', ['diff', `${this.baseSha}..${this.headSha}`, '--', 'package.json']);
+        packageDiff = this.safeExecSync('git', ['diff', this.baseSha + '..' + this.headSha, '--', 'package.json']);
       } catch (error) {
         packageDiff = 'No package.json changes';
       }
@@ -743,7 +743,7 @@ class ContextCollector {
       
       // Check package-lock.json changes
       try {
-        const lockDiff = this.safeExecSync('git', ['diff', '--stat', `${this.baseSha}..${this.headSha}`, '--', 'package-lock.json']);
+        const lockDiff = this.safeExecSync('git', ['diff', '--stat', this.baseSha + '..' + this.headSha, '--', 'package-lock.json']);
         if (lockDiff.trim()) {
           analysis += `Package-lock.json changed:\n${lockDiff}\n`;
         }
