@@ -5,6 +5,11 @@ on:
     branches:
       - main
 
+# Prevent concurrent releases
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   pull-requests: write
@@ -14,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Release Please
-      uses: google-github-actions/release-please-action@v4
+      uses: googleapis/release-please-action@a02a34c # v4.2.0
       id: release
       with:
         config-file: .release-please-config.json
@@ -50,29 +55,37 @@ jobs:
         
     - name: Comment on release
       if: ${{ steps.release.outputs.release_created }}
+      continue-on-error: true
       uses: actions/github-script@v7
       with:
         script: |
-          const releaseUrl = `https://github.com/${{ github.repository }}/releases/tag/${{ steps.release.outputs.tag_name }}`;
-          const npmUrl = `https://www.npmjs.com/package/@neublink/gitplus/v/${{ steps.release.outputs.major }}.${{ steps.release.outputs.minor }}.${{ steps.release.outputs.patch }}`;
-          
-          const comment = `🚀 **Release ${{ steps.release.outputs.tag_name }} Published!**
-          
-          📦 **NPM Package**: ${npmUrl}
-          📋 **Release Notes**: ${releaseUrl}
-          
-          ### Installation
-          \`\`\`bash
-          # Install as MCP server in Claude Code
-          claude mcp add gitplus -- npx @neublink/gitplus@${{ steps.release.outputs.tag_name }}
-          
-          # Or install CLI globally
-          npm install -g @neublink/gitplus@${{ steps.release.outputs.tag_name }}
-          \`\`\``;
-          
-          github.rest.repos.createCommitComment({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            commit_sha: context.sha,
-            body: comment
-          });
+          try {
+            const releaseUrl = `https://github.com/${{ github.repository }}/releases/tag/${{ steps.release.outputs.tag_name }}`;
+            const npmUrl = `https://www.npmjs.com/package/@neublink/gitplus/v/${{ steps.release.outputs.major }}.${{ steps.release.outputs.minor }}.${{ steps.release.outputs.patch }}`;
+            
+            const comment = `🚀 **Release ${{ steps.release.outputs.tag_name }} Published!**
+            
+            📦 **NPM Package**: ${npmUrl}
+            📋 **Release Notes**: ${releaseUrl}
+            
+            ### Installation
+            \`\`\`bash
+            # Install as MCP server in Claude Code
+            claude mcp add gitplus -- npx @neublink/gitplus@${{ steps.release.outputs.tag_name }}
+            
+            # Or install CLI globally
+            npm install -g @neublink/gitplus@${{ steps.release.outputs.tag_name }}
+            \`\`\``;
+            
+            await github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+              body: comment
+            });
+            
+            console.log('✅ Release comment created successfully');
+          } catch (error) {
+            console.error('⚠️ Failed to create release comment:', error.message);
+            // Don't fail the workflow for comment creation issues
+          }

@@ -1,5 +1,4 @@
 {
-  "bootstrap-sha": "6c8066d6c2df7e2b8f5a9b5a9b5a9b5a9b5a9b5a",
   "packages": {
     ".": {
       "package-name": "@neublink/gitplus",

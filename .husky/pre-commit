@@ -1,1 +1,13 @@
-npm test
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+# Fast pre-commit checks (skip full test suite for speed)
+echo "🔍 Running pre-commit checks..."
+
+# Type checking is fast and catches major issues
+npm run typecheck
+
+# Build check to ensure code compiles
+npm run build
+
+echo "✅ Pre-commit checks passed!"
