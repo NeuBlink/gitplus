@@ -1,0 +1,106 @@
+name: Dependencies
+
+on:
+  schedule:
+    # Run every Monday at 9 AM UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+jobs:
+  update-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Update dependencies
+      run: |
+        # Update all dependencies to latest compatible versions
+        npx npm-check-updates -u --target minor
+        npm install
+        
+    - name: Run tests
+      run: npm run validate
+      
+    - name: Check for changes
+      id: changes
+      run: |
+        if git diff --quiet package.json package-lock.json; then
+          echo "has_changes=false" >> $GITHUB_OUTPUT
+        else
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Create Pull Request
+      if: steps.changes.outputs.has_changes == 'true'
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        commit-message: "chore(deps): update dependencies to latest compatible versions"
+        title: "chore(deps): automated dependency updates"
+        body: |
+          ## Automated Dependency Updates
+          
+          This PR updates dependencies to their latest compatible versions.
+          
+          ### Changes
+          - Updated npm dependencies to latest minor/patch versions
+          - All tests pass with updated dependencies
+          
+          ### Testing
+          - ✅ Build successful
+          - ✅ All tests pass
+          - ✅ TypeScript compilation successful
+          
+          **Note**: This is an automated PR. Please review the changes before merging.
+        branch: chore/dependency-updates
+        delete-branch: true
+
+  security-audit:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Run security audit
+      run: npm audit --audit-level moderate
+      
+    - name: Check for vulnerabilities
+      run: |
+        AUDIT_RESULT=$(npm audit --audit-level moderate --json)
+        VULN_COUNT=$(echo "$AUDIT_RESULT" | jq '.metadata.vulnerabilities.total // 0')
+        
+        if [ "$VULN_COUNT" -gt 0 ]; then
+          echo "⚠️ Found $VULN_COUNT vulnerabilities"
+          echo "$AUDIT_RESULT" | jq '.vulnerabilities'
+          
+          # Create issue if vulnerabilities found
+          gh issue create \
+            --title "Security vulnerabilities detected" \
+            --body "Automated security scan found $VULN_COUNT vulnerabilities. Please review and update dependencies." \
+            --label "security,dependencies" || echo "Issue might already exist"
+        else
+          echo "✅ No security vulnerabilities found"
+        fi
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
