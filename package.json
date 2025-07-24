@@ -1,5 +1,5 @@
 {
-  "name": "@gitplus/mcp",
+  "name": "gitplus-mcp",
   "version": "1.0.0",
   "description": "AI-powered Git automation MCP server for Claude Code",
   "main": "dist/index.js",
