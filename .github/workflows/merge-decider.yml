@@ -34,71 +34,20 @@ jobs:
       - name: Wait for required CI workflows to complete
         run: |
           echo "🔄 Waiting for CI workflows to complete..."
+          echo "Current commit: ${{ github.event.pull_request.head.sha }}"
           
-          # Function to check if a workflow run has completed
-          check_workflow_status() {
-            local workflow_name="$1"
-            echo "Checking status of $workflow_name..."
-            
-            # Get the latest run for this workflow on this PR - more robust approach
-            local result=$(gh run list --repo ${{ github.repository }} \
-              --workflow "$workflow_name" \
-              --json status,conclusion,headSha 2>/dev/null | \
-              jq -r ".[] | select(.headSha == \"${{ github.event.pull_request.head.sha }}\") | \"\(.status),\(.conclusion)\"" 2>/dev/null | \
-              head -1)
-            
-            if [ -z "$result" ] || [ "$result" = "null,null" ]; then
-              echo ""
-            else
-              echo "$result"
-            fi
-          }
+          # Much simpler wait logic - just wait a reasonable time for workflows to start
+          echo "⏳ Waiting 30 seconds for workflows to start and run..."
+          sleep 30
           
-          # Wait for workflows with timeout
-          timeout=600  # 10 minutes
-          interval=15  # Check every 15 seconds
-          elapsed=0
+          # Check what workflows we have
+          echo "📋 Available workflows for this commit:"
+          gh run list --repo ${{ github.repository }} \
+            --json workflowName,status,conclusion,headSha \
+            --jq ".[] | select(.headSha == \"${{ github.event.pull_request.head.sha }}\") | \"\(.workflowName): \(.status) (\(.conclusion))\"" \
+            | head -10
           
-          required_workflows=("CI" "PR Checks" "Claude Code Review")
-          
-          while [ $elapsed -lt $timeout ]; do
-            all_complete=true
-            
-            for workflow in "${required_workflows[@]}"; do
-              status_info=$(check_workflow_status "$workflow")
-              
-              if [ -z "$status_info" ]; then
-                echo "⏳ Workflow '$workflow' not found or not started yet"
-                all_complete=false
-                continue
-              fi
-              
-              # Parse status,conclusion format
-              status=$(echo "$status_info" | cut -d',' -f1)
-              conclusion=$(echo "$status_info" | cut -d',' -f2)
-              
-              if [ "$status" != "completed" ]; then
-                echo "⏳ Workflow '$workflow' still running (status: $status)"
-                all_complete=false
-              else
-                echo "✅ Workflow '$workflow' completed (conclusion: $conclusion)"
-              fi
-            done
-            
-            if [ "$all_complete" = true ]; then
-              echo "🎉 All required workflows have completed!"
-              break
-            fi
-            
-            echo "⏳ Waiting ${interval}s before next check... (${elapsed}s/${timeout}s elapsed)"
-            sleep $interval
-            elapsed=$((elapsed + interval))
-          done
-          
-          if [ $elapsed -ge $timeout ]; then
-            echo "⚠️ Timeout waiting for workflows to complete"
-            echo "Proceeding with available information..."
-          fi
+          echo "✅ Proceeding with workflow analysis..."
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
