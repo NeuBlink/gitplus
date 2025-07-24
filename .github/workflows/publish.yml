@@ -101,7 +101,8 @@ jobs:
       if: ${{ inputs.create_tag }}
       run: |
         git tag ${{ env.NEW_VERSION }}
-        git push origin HEAD --tags
+        git push origin main
+        git push origin --tags
         
     - name: Publish to NPM
       run: npm publish --access public

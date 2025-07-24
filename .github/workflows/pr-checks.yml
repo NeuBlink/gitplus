@@ -81,6 +81,47 @@ jobs:
           cat cli-help.txt
           exit 1
         fi
+        
+    - name: Validate npm publish readiness
+      run: |
+        npm run build
+        
+        # Test that package can be packed without errors
+        npm pack --dry-run
+        echo "✅ Package can be packed successfully"
+        
+        # Validate package.json for NPM publishing
+        node -e "
+          const pkg = require('./package.json');
+          if (!pkg.name || !pkg.version || !pkg.description) {
+            console.error('❌ Missing required package.json fields');
+            process.exit(1);
+          }
+          if (!pkg.main || !pkg.bin) {
+            console.error('❌ Missing main or bin fields in package.json');
+            process.exit(1);
+          }
+          console.log('✅ Package.json is valid for publishing');
+        "
+        
+    - name: Test git tag creation
+      run: |
+        # Get current version from package.json
+        VERSION=$(node -p "require('./package.json').version")
+        TEST_TAG="test-v$VERSION-pr-check"
+        
+        # Test that we can create and delete a test tag
+        git tag "$TEST_TAG" 2>/dev/null || {
+          echo "❌ Cannot create git tag"
+          exit 1
+        }
+        
+        git tag -d "$TEST_TAG" 2>/dev/null || {
+          echo "❌ Cannot delete git tag"
+          exit 1
+        }
+        
+        echo "✅ Git tag creation works correctly"
 
   compatibility-check:
     runs-on: ${{ matrix.os }}
