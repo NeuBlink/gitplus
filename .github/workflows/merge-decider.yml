@@ -15,7 +15,7 @@ permissions:
   pull-requests: write
   checks: read
   actions: read
-  id-token: write
+  id-token: write  # Required for Claude Code Action authentication
 
 jobs:
   # AI-powered merge decision that waits for all CI checks to complete
@@ -23,92 +23,113 @@ jobs:
     runs-on: ubuntu-latest
     # Run automatically when PR is updated - no needs dependency since jobs are in different workflows
     
-    permissions:
-      contents: read
-      pull-requests: write
-      checks: read
-      actions: read
-      id-token: write
+    # Permissions inherited from workflow level, no need to duplicate
       
     steps:
       - name: Wait for required CI workflows to complete
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           echo "🔄 Waiting for CI workflows to complete..."
-          echo "Current commit: ${{ github.event.pull_request.head.sha }}"
+          echo "Current commit: $PR_HEAD_SHA"
           
           # Much simpler wait logic - just wait a reasonable time for workflows to start
           echo "⏳ Waiting 30 seconds for workflows to start and run..."
           sleep 30
           
-          # Check what workflows we have
+          # Check what workflows we have using environment variables
           echo "📋 Available workflows for this commit:"
-          gh run list --repo ${{ github.repository }} \
+          gh run list --repo "$GITHUB_REPOSITORY" \
             --json workflowName,status,conclusion,headSha \
-            --jq ".[] | select(.headSha == \"${{ github.event.pull_request.head.sha }}\") | \"\(.workflowName): \(.status) (\(.conclusion))\"" \
+            --jq ".[] | select(.headSha == \"$PR_HEAD_SHA\") | \"\(.workflowName): \(.status) (\(.conclusion))\"" \
             | head -10
           
           echo "✅ Proceeding with workflow analysis..."
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
         with:
           fetch-depth: 0 # Need full history for comprehensive analysis
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
         with:
           node-version: '20.x'
 
       - name: Collect comprehensive context for AI analysis
         id: collect-context
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          PR_ADDITIONS: ${{ github.event.pull_request.additions }}
+          PR_DELETIONS: ${{ github.event.pull_request.deletions }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           # Create context directory
           mkdir -p .github/context
           
           echo "🔍 Collecting comprehensive PR context for AI analysis..."
           
-          # Collect basic PR information
+          # Collect basic PR information using environment variables to prevent injection
           echo "=== PR INFORMATION ===" > .github/context/pr-info.txt
-          echo "PR Number: ${{ github.event.pull_request.number }}" >> .github/context/pr-info.txt
-          echo "Title: ${{ github.event.pull_request.title }}" >> .github/context/pr-info.txt
-          echo "Author: ${{ github.event.pull_request.user.login }}" >> .github/context/pr-info.txt
-          echo "Author Association: ${{ github.event.pull_request.author_association }}" >> .github/context/pr-info.txt
-          echo "Base Branch: ${{ github.event.pull_request.base.ref }}" >> .github/context/pr-info.txt
-          echo "Head Branch: ${{ github.event.pull_request.head.ref }}" >> .github/context/pr-info.txt
-          echo "Files Changed: ${{ github.event.pull_request.changed_files }}" >> .github/context/pr-info.txt
-          echo "Additions: ${{ github.event.pull_request.additions }}" >> .github/context/pr-info.txt
-          echo "Deletions: ${{ github.event.pull_request.deletions }}" >> .github/context/pr-info.txt
-          echo "Draft: ${{ github.event.pull_request.draft }}" >> .github/context/pr-info.txt
+          echo "PR Number: $PR_NUMBER" >> .github/context/pr-info.txt
+          echo "Title: $PR_TITLE" >> .github/context/pr-info.txt
+          echo "Author: $PR_AUTHOR" >> .github/context/pr-info.txt
+          echo "Author Association: $PR_AUTHOR_ASSOCIATION" >> .github/context/pr-info.txt
+          echo "Base Branch: $PR_BASE_REF" >> .github/context/pr-info.txt
+          echo "Head Branch: $PR_HEAD_REF" >> .github/context/pr-info.txt
+          echo "Files Changed: $PR_CHANGED_FILES" >> .github/context/pr-info.txt
+          echo "Additions: $PR_ADDITIONS" >> .github/context/pr-info.txt
+          echo "Deletions: $PR_DELETIONS" >> .github/context/pr-info.txt
+          echo "Draft: $PR_DRAFT" >> .github/context/pr-info.txt
           echo "" >> .github/context/pr-info.txt
           
-          # Get PR description
+          # Get PR description safely using printf to handle special characters
           echo "=== PR DESCRIPTION ===" >> .github/context/pr-info.txt
-          cat << 'EOF' >> .github/context/pr-info.txt
-${{ github.event.pull_request.body }}
-EOF
+          printf '%s\n' "$PR_BODY" >> .github/context/pr-info.txt
           echo "" >> .github/context/pr-info.txt
           
-          # Collect commit information
+          # Collect commit information using environment variables
           echo "=== COMMITS ===" > .github/context/commits.txt
-          git log --oneline ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} >> .github/context/commits.txt || echo "Could not get commits" >> .github/context/commits.txt
+          if ! git log --oneline "$PR_BASE_SHA..$PR_HEAD_SHA" >> .github/context/commits.txt 2>&1; then
+            echo "❌ Error: Could not retrieve commit information for range $PR_BASE_SHA..$PR_HEAD_SHA" >> .github/context/commits.txt
+            echo "This may indicate an invalid SHA range or git repository issue." >> .github/context/commits.txt
+          fi
           echo "" >> .github/context/commits.txt
           
-          # Collect file changes
+          # Collect file changes using environment variables
           echo "=== FILE CHANGES ===" > .github/context/file-changes.txt
-          git diff --name-status ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} >> .github/context/file-changes.txt || echo "Could not get file changes" >> .github/context/file-changes.txt
+          if ! git diff --name-status "$PR_BASE_SHA..$PR_HEAD_SHA" >> .github/context/file-changes.txt 2>&1; then
+            echo "❌ Error: Could not retrieve file changes for range $PR_BASE_SHA..$PR_HEAD_SHA" >> .github/context/file-changes.txt
+            echo "This may indicate an invalid SHA range or git repository issue." >> .github/context/file-changes.txt
+          fi
           echo "" >> .github/context/file-changes.txt
           
-          # Get diff stats
+          # Get diff stats using environment variables
           echo "=== DIFF STATISTICS ===" >> .github/context/file-changes.txt
-          git diff --stat ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} >> .github/context/file-changes.txt || echo "Could not get diff stats" >> .github/context/file-changes.txt
+          if ! git diff --stat "$PR_BASE_SHA..$PR_HEAD_SHA" >> .github/context/file-changes.txt 2>&1; then
+            echo "❌ Error: Could not retrieve diff statistics for range $PR_BASE_SHA..$PR_HEAD_SHA" >> .github/context/file-changes.txt
+            echo "This may indicate an invalid SHA range or git repository issue." >> .github/context/file-changes.txt
+          fi
           echo "" >> .github/context/file-changes.txt
 
       - name: Collect CI workflow results from GitHub API
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           echo "=== CI WORKFLOW RESULTS ===" > .github/context/ci-results.txt
-          echo "Collected from GitHub API for commit ${{ github.event.pull_request.head.sha }}" >> .github/context/ci-results.txt
+          echo "Collected from GitHub API for commit $PR_HEAD_SHA" >> .github/context/ci-results.txt
           echo "" >> .github/context/ci-results.txt
           
           # Get workflow run results
@@ -119,15 +140,19 @@ EOF
           for workflow in "${workflows[@]}"; do
             echo "Checking workflow: $workflow" >> .github/context/ci-results.txt
             
-            # Get the latest run for this workflow
-            run_info=$(gh run list --repo ${{ github.repository }} \
+            # Get the latest run for this workflow using environment variables
+            if ! run_info=$(gh run list --repo "$GITHUB_REPOSITORY" \
               --workflow "$workflow" \
               --json status,conclusion,headSha \
-              --jq ".[] | select(.headSha == \"${{ github.event.pull_request.head.sha }}\") | {status: .status, conclusion: .conclusion}" \
-              | head -1)
-            
-            if [ -z "$run_info" ]; then
+              --jq ".[] | select(.headSha == \"$PR_HEAD_SHA\") | {status: .status, conclusion: .conclusion}" \
+              | head -1 2>/dev/null); then
+              echo "  ❌ Error: Failed to query GitHub API for workflow '$workflow'" >> .github/context/ci-results.txt
+              echo "  This may indicate API rate limiting or network issues." >> .github/context/ci-results.txt
+              overall_status="FAIL"
+              failed_workflows+=("$workflow (API error)")
+            elif [ -z "$run_info" ] || [ "$run_info" = "null" ]; then
               echo "  Status: NOT_FOUND" >> .github/context/ci-results.txt
+              echo "  This workflow may not have run yet for this commit." >> .github/context/ci-results.txt
               overall_status="FAIL"
               failed_workflows+=("$workflow (not found)")
             else
@@ -161,14 +186,18 @@ EOF
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Collect Claude Code review findings
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           echo "=== CLAUDE CODE REVIEW ANALYSIS ===" > .github/context/claude-review-analysis.txt
           
-          # Get Claude Code Review workflow result
-          claude_run_info=$(gh run list --repo ${{ github.repository }} \
+          # Get Claude Code Review workflow result using environment variables
+          claude_run_info=$(gh run list --repo "$GITHUB_REPOSITORY" \
             --workflow "Claude Code Review" \
             --json status,conclusion,headSha \
-            --jq ".[] | select(.headSha == \"${{ github.event.pull_request.head.sha }}\") | {status: .status, conclusion: .conclusion}" \
+            --jq ".[] | select(.headSha == \"$PR_HEAD_SHA\") | {status: .status, conclusion: .conclusion}" \
             | head -1)
           
           if [ -n "$claude_run_info" ]; then
@@ -181,17 +210,17 @@ EOF
           fi
           echo "" >> .github/context/claude-review-analysis.txt
           
-          # Get Claude Code review comments
+          # Get Claude Code review comments using environment variables
           if command -v gh &> /dev/null; then
             echo "Fetching Claude Code review comments..." >> .github/context/claude-review-analysis.txt
             
             # Get PR reviews from Claude
-            gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" \
               --jq '.[] | select(.user.login | test("claude|github-actions")) | {state: .state, body: .body, submitted_at: .submitted_at}' \
               > .github/context/claude-review.json 2>/dev/null || echo "[]" > .github/context/claude-review.json
             
             # Get issue comments from Claude  
-            gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments \
+            gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
               --jq '.[] | select(.user.login | test("claude|github-actions")) | {body: .body, created_at: .created_at}' \
               > .github/context/claude-comments.json 2>/dev/null || echo "[]" > .github/context/claude-comments.json
             
@@ -330,14 +359,15 @@ EOF
 
       - name: Update PR labels based on decision
         if: always()
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ "${{ env.MERGE_DECISION }}" = "pass" ]; then
-            gh pr edit ${{ github.event.pull_request.number }} --add-label "ready-to-merge" --remove-label "needs-changes" || true
+            gh pr edit "$PR_NUMBER" --add-label "ready-to-merge" --remove-label "needs-changes" || true
           else
-            gh pr edit ${{ github.event.pull_request.number }} --add-label "needs-changes" --remove-label "ready-to-merge" || true
+            gh pr edit "$PR_NUMBER" --add-label "needs-changes" --remove-label "ready-to-merge" || true
           fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Summary job that branch protection will check - this is what branch protection waits for
   merge-decision-summary:

@@ -54,7 +54,7 @@ jobs:
       next_version: ${{ steps.check.outputs.next_version }}
     steps:
       - name: Checkout develop
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
         with:
           ref: develop
           fetch-depth: 0
@@ -136,14 +136,14 @@ jobs:
     needs: [detect-release-need]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
         with:
           ref: ${{ github.event.inputs.source_branch || 'develop' }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
         with:
           node-version: '20.x'
           cache: 'npm'
@@ -286,7 +286,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout main
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
         with:
           ref: main
           fetch-depth: 0
