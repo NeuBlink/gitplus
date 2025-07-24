@@ -2,255 +2,29 @@ name: AI Merge Decider
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
-    branches: [main, develop, 'release/*']
-  # Manual trigger for testing
-  workflow_dispatch:
-
-# Ensure only one merge decision runs per PR
-concurrency:
-  group: merge-decider-${{ github.event.pull_request.number || github.run_number }}
-  cancel-in-progress: true
+    types: [opened, synchronize]
 
 permissions:
   contents: read
-  pull-requests: write
-  checks: read
+  pull-requests: read
+  issues: read
   actions: read
-  id-token: write  # Required for Claude Code Action authentication
+  id-token: write
 
 jobs:
-  # AI-powered merge decision that waits for all CI checks to complete
   ai-merge-decision:
     runs-on: ubuntu-latest
-    # Only run for pull requests, skip for manual triggers
-    if: github.event_name == 'pull_request'
-    # Permissions inherited from workflow level, no need to duplicate
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
     
     steps:
-      - name: Wait for required CI workflows to complete
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          echo "🔄 Waiting for CI workflows to complete..."
-          echo "Current commit: $PR_HEAD_SHA"
-          
-          # Much simpler wait logic - just wait a reasonable time for workflows to start
-          echo "⏳ Waiting 30 seconds for workflows to start and run..."
-          sleep 30
-          
-          # Check what workflows we have using environment variables
-          echo "📋 Available workflows for this commit:"
-          gh run list --repo "$GITHUB_REPOSITORY" \
-            --json workflowName,status,conclusion,headSha \
-            --jq ".[] | select(.headSha == \"$PR_HEAD_SHA\") | \"\(.workflowName): \(.status) (\(.conclusion))\"" \
-            | head -10
-          
-          echo "✅ Proceeding with workflow analysis..."
-
       - name: Checkout repository
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
         with:
-          fetch-depth: 0 # Need full history for comprehensive analysis
-
-      - name: Setup Node.js
-        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
-        with:
-          node-version: '20.x'
-
-      - name: Collect comprehensive context for AI analysis
-        id: collect-context
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number || '0' }}
-          PR_TITLE: ${{ github.event.pull_request.title || 'Manual Trigger' }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login || github.actor }}
-          PR_AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association || 'MEMBER' }}
-          PR_BASE_REF: ${{ github.event.pull_request.base.ref || 'main' }}
-          PR_HEAD_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
-          PR_CHANGED_FILES: ${{ github.event.pull_request.changed_files || '0' }}
-          PR_ADDITIONS: ${{ github.event.pull_request.additions || '0' }}
-          PR_DELETIONS: ${{ github.event.pull_request.deletions || '0' }}
-          PR_DRAFT: ${{ github.event.pull_request.draft || 'false' }}
-          PR_BODY: ${{ github.event.pull_request.body || 'Manual trigger - no PR body' }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || 'HEAD~1' }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          # Create context directory
-          mkdir -p .github/context
-          
-          echo "🔍 Collecting comprehensive PR context for AI analysis..."
-          
-          # Collect basic PR information using environment variables to prevent injection
-          echo "=== PR INFORMATION ===" > .github/context/pr-info.txt
-          echo "PR Number: $PR_NUMBER" >> .github/context/pr-info.txt
-          echo "Title: $PR_TITLE" >> .github/context/pr-info.txt
-          echo "Author: $PR_AUTHOR" >> .github/context/pr-info.txt
-          echo "Author Association: $PR_AUTHOR_ASSOCIATION" >> .github/context/pr-info.txt
-          echo "Base Branch: $PR_BASE_REF" >> .github/context/pr-info.txt
-          echo "Head Branch: $PR_HEAD_REF" >> .github/context/pr-info.txt
-          echo "Files Changed: $PR_CHANGED_FILES" >> .github/context/pr-info.txt
-          echo "Additions: $PR_ADDITIONS" >> .github/context/pr-info.txt
-          echo "Deletions: $PR_DELETIONS" >> .github/context/pr-info.txt
-          echo "Draft: $PR_DRAFT" >> .github/context/pr-info.txt
-          echo "" >> .github/context/pr-info.txt
-          
-          # Get PR description safely using printf to handle special characters
-          echo "=== PR DESCRIPTION ===" >> .github/context/pr-info.txt
-          printf '%s\n' "$PR_BODY" >> .github/context/pr-info.txt
-          echo "" >> .github/context/pr-info.txt
-          
-          # Collect commit information using environment variables
-          echo "=== COMMITS ===" > .github/context/commits.txt
-          if ! git log --oneline "$PR_BASE_SHA..$PR_HEAD_SHA" >> .github/context/commits.txt 2>&1; then
-            echo "❌ Error: Could not retrieve commit information for range $PR_BASE_SHA..$PR_HEAD_SHA" >> .github/context/commits.txt
-            echo "This may indicate an invalid SHA range or git repository issue." >> .github/context/commits.txt
-          fi
-          echo "" >> .github/context/commits.txt
-          
-          # Collect file changes using environment variables
-          echo "=== FILE CHANGES ===" > .github/context/file-changes.txt
-          if ! git diff --name-status "$PR_BASE_SHA..$PR_HEAD_SHA" >> .github/context/file-changes.txt 2>&1; then
-            echo "❌ Error: Could not retrieve file changes for range $PR_BASE_SHA..$PR_HEAD_SHA" >> .github/context/file-changes.txt
-            echo "This may indicate an invalid SHA range or git repository issue." >> .github/context/file-changes.txt
-          fi
-          echo "" >> .github/context/file-changes.txt
-          
-          # Get diff stats using environment variables
-          echo "=== DIFF STATISTICS ===" >> .github/context/file-changes.txt
-          if ! git diff --stat "$PR_BASE_SHA..$PR_HEAD_SHA" >> .github/context/file-changes.txt 2>&1; then
-            echo "❌ Error: Could not retrieve diff statistics for range $PR_BASE_SHA..$PR_HEAD_SHA" >> .github/context/file-changes.txt
-            echo "This may indicate an invalid SHA range or git repository issue." >> .github/context/file-changes.txt
-          fi
-          echo "" >> .github/context/file-changes.txt
-
-      - name: Collect CI workflow results from GitHub API
-        env:
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          echo "=== CI WORKFLOW RESULTS ===" > .github/context/ci-results.txt
-          echo "Collected from GitHub API for commit $PR_HEAD_SHA" >> .github/context/ci-results.txt
-          echo "" >> .github/context/ci-results.txt
-          
-          # Get workflow run results
-          workflows=("CI" "PR Checks" "Claude Code Review")
-          overall_status="PASS"
-          failed_workflows=()
-          
-          for workflow in "${workflows[@]}"; do
-            echo "Checking workflow: $workflow" >> .github/context/ci-results.txt
-            
-            # Get the latest run for this workflow using environment variables
-            if ! run_info=$(gh run list --repo "$GITHUB_REPOSITORY" \
-              --workflow "$workflow" \
-              --json status,conclusion,headSha \
-              --jq ".[] | select(.headSha == \"$PR_HEAD_SHA\") | {status: .status, conclusion: .conclusion}" \
-              | head -1 2>/dev/null); then
-              echo "  ❌ Error: Failed to query GitHub API for workflow '$workflow'" >> .github/context/ci-results.txt
-              echo "  This may indicate API rate limiting or network issues." >> .github/context/ci-results.txt
-              overall_status="FAIL"
-              failed_workflows+=("$workflow (API error)")
-            elif [ -z "$run_info" ] || [ "$run_info" = "null" ]; then
-              echo "  Status: NOT_FOUND" >> .github/context/ci-results.txt
-              echo "  This workflow may not have run yet for this commit." >> .github/context/ci-results.txt
-              overall_status="FAIL"
-              failed_workflows+=("$workflow (not found)")
-            else
-              status=$(echo "$run_info" | jq -r '.status // "unknown"')
-              conclusion=$(echo "$run_info" | jq -r '.conclusion // "unknown"')
-              
-              echo "  Status: $status" >> .github/context/ci-results.txt
-              echo "  Conclusion: $conclusion" >> .github/context/ci-results.txt
-              
-              if [ "$conclusion" != "success" ]; then
-                overall_status="FAIL"
-                failed_workflows+=("$workflow ($conclusion)")
-              fi
-            fi
-            echo "" >> .github/context/ci-results.txt
-          done
-          
-          echo "=== OVERALL ASSESSMENT ===" >> .github/context/ci-results.txt
-          echo "Overall CI Status: $overall_status" >> .github/context/ci-results.txt
-          
-          if [ "$overall_status" = "FAIL" ]; then
-            echo "Failed workflows:" >> .github/context/ci-results.txt
-            for failed in "${failed_workflows[@]}"; do
-              echo "  - $failed" >> .github/context/ci-results.txt
-            done
-          fi
-          
-          # Export for use in AI prompt
-          echo "CI_OVERALL_STATUS=$overall_status" >> $GITHUB_ENV
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Collect Claude Code review findings
-        env:
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number || '0' }}
-        run: |
-          echo "=== CLAUDE CODE REVIEW ANALYSIS ===" > .github/context/claude-review-analysis.txt
-          
-          # Get Claude Code Review workflow result using environment variables
-          claude_run_info=$(gh run list --repo "$GITHUB_REPOSITORY" \
-            --workflow "Claude Code Review" \
-            --json status,conclusion,headSha \
-            --jq ".[] | select(.headSha == \"$PR_HEAD_SHA\") | {status: .status, conclusion: .conclusion}" \
-            | head -1)
-          
-          if [ -n "$claude_run_info" ]; then
-            status=$(echo "$claude_run_info" | jq -r '.status // "unknown"')
-            conclusion=$(echo "$claude_run_info" | jq -r '.conclusion // "unknown"')
-            echo "Claude Review Workflow Status: $status" >> .github/context/claude-review-analysis.txt
-            echo "Claude Review Workflow Conclusion: $conclusion" >> .github/context/claude-review-analysis.txt
-          else
-            echo "Claude Review Workflow: NOT_FOUND" >> .github/context/claude-review-analysis.txt
-          fi
-          echo "" >> .github/context/claude-review-analysis.txt
-          
-          # Get Claude Code review comments using environment variables
-          if command -v gh &> /dev/null; then
-            echo "Fetching Claude Code review comments..." >> .github/context/claude-review-analysis.txt
-            
-            # Get PR reviews from Claude
-            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" \
-              --jq '.[] | select(.user.login | test("claude|github-actions")) | {state: .state, body: .body, submitted_at: .submitted_at}' \
-              > .github/context/claude-review.json 2>/dev/null || echo "[]" > .github/context/claude-review.json
-            
-            # Get issue comments from Claude  
-            gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
-              --jq '.[] | select(.user.login | test("claude|github-actions")) | {body: .body, created_at: .created_at}' \
-              > .github/context/claude-comments.json 2>/dev/null || echo "[]" > .github/context/claude-comments.json
-            
-            # Analyze Claude review sentiment
-            if [ -s .github/context/claude-review.json ] && [ "$(cat .github/context/claude-review.json)" != "[]" ]; then
-              echo "✅ Claude Code review found" >> .github/context/claude-review-analysis.txt
-              
-              # Check if Claude review indicates issues
-              if jq -r '.[].body' .github/context/claude-review.json 2>/dev/null | grep -qi "not.*recommend\|concern\|issue\|problem\|fix.*needed\|should.*not\|❌\|⚠️\|blocking"; then
-                echo "⚠️ Claude Code review indicates concerns or issues" >> .github/context/claude-review-analysis.txt
-                echo "CLAUDE_SENTIMENT=negative" >> $GITHUB_ENV
-              elif jq -r '.[].body' .github/context/claude-review.json 2>/dev/null | grep -qi "looks good\|approved\|ready\|✅\|well done\|recommend.*merg"; then
-                echo "✅ Claude Code review appears positive" >> .github/context/claude-review-analysis.txt
-                echo "CLAUDE_SENTIMENT=positive" >> $GITHUB_ENV
-              else
-                echo "ℹ️ Claude Code review is neutral" >> .github/context/claude-review-analysis.txt
-                echo "CLAUDE_SENTIMENT=neutral" >> $GITHUB_ENV
-              fi
-            else
-              echo "ℹ️ No Claude Code review found" >> .github/context/claude-review-analysis.txt
-              echo "CLAUDE_SENTIMENT=none" >> $GITHUB_ENV
-            fi
-          else
-            echo "GitHub CLI not available, skipping Claude review collection" >> .github/context/claude-review-analysis.txt
-            echo "CLAUDE_SENTIMENT=unknown" >> $GITHUB_ENV
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
 
       - name: AI Merge Decision Analysis
         id: merge-decision
@@ -262,90 +36,37 @@ jobs:
           direct_prompt: |
             # AI Merge Decision Analysis
             
-            You are an AI merge decider for the gitplus repository. Your primary job is to synthesize the **Claude Code review findings** with CI/CD results to make a **PASS/FAIL decision** on whether this PR should be merged.
+            You are an AI merge decider for the gitplus repository. Analyze this PR and make a **PASS/FAIL decision** based on:
             
-            ## CRITICAL: Decision Hierarchy
+            1. **Claude Code review findings** (if available)
+            2. **CI/CD results** 
+            3. **Code quality and changes**
             
-            The **Claude Code review action has already performed expert code analysis**. Your decision hierarchy:
-            
-            1. **Claude Code Review Says No/Has Concerns** → **AUTOMATIC FAIL** (regardless of CI status)
-            2. **Claude Code Review Positive + CI Passes** → **PASS**
-            3. **Claude Code Review Positive + CI Fails** → **FAIL** (fix CI first)
-            4. **Claude Code Review Neutral/None + CI Passes** → **PASS**
-            5. **Any Critical CI Failures** → **FAIL**
-            
-            ## Current Context
-            
-            **CI Workflow Results (from GitHub API):**
-            - Overall CI Status: ${{ env.CI_OVERALL_STATUS }}
-            - All workflows checked: CI, PR Checks, Claude Code Review
-            
-            **Claude Review Sentiment:** ${{ env.CLAUDE_SENTIMENT }}
-            **Target Branch:** ${{ github.event.pull_request.base.ref || 'main' }}
-            **PR Author:** ${{ github.event.pull_request.user.login || github.actor }} (${{ github.event.pull_request.author_association || 'MEMBER' }})
-            
-            ## Context Files Available
-            
-            **Priority order for analysis:**
-            1. `.github/context/claude-review.json` - **MOST IMPORTANT** - Claude's expert code review
-            2. `.github/context/claude-comments.json` - Claude's additional feedback  
-            3. `.github/context/claude-review-analysis.txt` - Claude review summary
-            4. `.github/context/ci-results.txt` - CI job results and analysis
-            5. `.github/context/pr-info.txt` - PR details and description
-            6. `.github/context/commits.txt` - Commit history
-            7. `.github/context/file-changes.txt` - File changes and statistics
+            ## Decision Rules
+            - **FAIL if**: Claude Code review recommends against merging OR critical issues found
+            - **PASS if**: Code looks good and no blocking issues
+            - Provide specific, actionable feedback for failures
             
             ## Required Output Format
-            
-            You MUST provide your decision in this exact format:
             
             ```
             ## 🤖 AI Merge Decision: [PASS/FAIL]
             
-            **Target Branch:** ${{ github.event.pull_request.base.ref || 'main' }}
-            **Decision Basis:** [Claude Code Review + CI Status / CI Status Only]  
-            **Claude Review Sentiment:** ${{ env.CLAUDE_SENTIMENT }}
+            **Target Branch:** ${{ github.event.pull_request.base.ref }}
+            **PR Author:** ${{ github.event.pull_request.user.login }}
             
-            ### 🎯 Claude Code Review Analysis
-            **Status:** [Found/Not Found]
-            **Recommendation:** [Positive/Negative/Neutral/Not Available]
-            **Key Findings:** [Summary of Claude's expert analysis or "No Claude review available"]
+            ### 🎯 Analysis Summary
+            [Brief summary of your analysis]
             
-            ### 🔧 CI/CD Status Summary
-            **Overall:** ${{ env.CI_OVERALL_STATUS }}
-            **Workflows Checked:** CI, PR Checks, Claude Code Review
-            **Details:** [See context files for specific workflow results]
-            
-            ### ✅ Strengths
-            - [List positive aspects of this PR]
-            
-            ### ⚠️ Issues Found
-            - [List any issues with severity levels]
-            
-            ### 🔧 Required Actions (if FAIL)
-            1. [Specific, actionable step to fix issue 1]
-            2. [Specific, actionable step to fix issue 2]
-            3. [etc.]
-            
-            ### 💡 Final Recommendation
-            [Clear explanation of why this should/shouldn't merge, emphasizing how you weighted Claude Code review findings vs CI results]
+            ### 🔧 Recommendation
+            [Clear explanation of why this should/shouldn't merge]
             
             ---
-            *Decision made by Claude AI • Integrating expert Claude Code review • PR #${{ github.event.pull_request.number || '0' }}*
+            *Decision made by Claude AI • PR #${{ github.event.pull_request.number }}*
             ```
-            
-            ## Decision Rules
-            - **FAIL if**: Claude Code review recommends against merging OR critical CI failures
-            - **PASS if**: Claude Code review is positive/neutral AND CI passes  
-            - **Always respect Claude Code's expert technical analysis** - don't override its code quality findings
-            - Provide specific, actionable remediation steps for failures
-            - Consider the author's experience level (first-time contributors get more guidance)
-            
-            **Remember: The Claude Code review has done the deep technical code analysis. Your job is to synthesize that expert opinion with CI/CD results for the final merge decision.**
 
       - name: Set merge decision status
         run: |
-          # Extract decision from Claude's response
           if echo "${{ steps.merge-decision.outputs.claude_response }}" | grep -q "AI Merge Decision: PASS"; then
             echo "MERGE_DECISION=pass" >> $GITHUB_ENV
             echo "✅ AI Merge Decision: PASS"
@@ -359,19 +80,6 @@ jobs:
             exit 1
           fi
 
-      - name: Update PR labels based on decision
-        if: always() && github.event.pull_request.number
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ "${{ env.MERGE_DECISION }}" = "pass" ]; then
-            gh pr edit "$PR_NUMBER" --add-label "ready-to-merge" --remove-label "needs-changes" || true
-          else
-            gh pr edit "$PR_NUMBER" --add-label "needs-changes" --remove-label "ready-to-merge" || true
-          fi
-
-  # Summary job that branch protection will check - this is what branch protection waits for
   merge-decision-summary:
     runs-on: ubuntu-latest
     needs: [ai-merge-decision]
@@ -382,16 +90,9 @@ jobs:
           if [ "${{ needs.ai-merge-decision.result }}" = "success" ]; then
             echo "✅ AI Merge Decision: APPROVED"
             echo "This PR has been approved by the AI merge decider and is ready to merge."
-            echo "The AI analyzed Claude Code review findings and all CI results to make this decision."
-          elif [ "${{ needs.ai-merge-decision.result }}" = "skipped" ]; then
-            echo "⚠️ AI Merge Decision: SKIPPED"
-            echo "AI merge decider was skipped (likely due to manual trigger)."
-            echo "Manual review is required for this change."
-            exit 1
           else
             echo "❌ AI Merge Decision: REJECTED"  
             echo "This PR has been rejected by the AI merge decider."
-            echo "Please check the AI analysis comment for detailed feedback and required actions."
-            echo "The decision was based on Claude Code review findings and/or CI failures."
+            echo "Please check the AI analysis comment for detailed feedback."
             exit 1
           fi
