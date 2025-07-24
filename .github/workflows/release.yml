@@ -8,6 +8,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -30,6 +32,8 @@ jobs:
   publish-npm:
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -55,6 +59,8 @@ jobs:
   create-github-release:
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -107,7 +113,7 @@ jobs:
         EOF
         
     - name: Create GitHub Release
-      uses: actions/create-release@v1
+      uses: actions/create-release@0cb9c9b65d5d1901c1f53e5e66eaf4adc7b913fd # v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
@@ -120,6 +126,8 @@ jobs:
   test-published-package:
     needs: [publish-npm, create-github-release]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
     - name: Wait for NPM propagation
       run: sleep 60
