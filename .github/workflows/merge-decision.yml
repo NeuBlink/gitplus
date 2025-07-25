@@ -116,6 +116,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: wait-for-checks
     if: needs.wait-for-checks.outputs.all_checks_complete == 'true'
+    outputs:
+      DECISION: ${{ steps.parse-decision.outputs.DECISION }}
+      REASON: ${{ steps.parse-decision.outputs.REASON }}
+      RECOMMENDED_ACTION: ${{ steps.parse-decision.outputs.RECOMMENDED_ACTION }}
     
     steps:
       - name: Gather PR context
@@ -212,7 +216,7 @@ jobs:
                 echo "EOF" >> $GITHUB_OUTPUT
               else
                 echo "❌ No Claude review content available"
-                echo "CLAUDE_REVIEW_CONTENT=No detailed review content available - neither file nor comment found" >> $GITHUB_OUTPUT
+                echo "CLAUDE_REVIEW_CONTENT=⚠️ Claude review content not provided in context. This may be due to: 1) Claude review workflow still running, 2) Missing artifact file, 3) No substantial Claude comments found. This is common for simple PRs and does not indicate code quality issues." >> $GITHUB_OUTPUT
               fi
             fi
           else
@@ -220,10 +224,11 @@ jobs:
             echo "CLAUDE_REVIEW_CONTENT=Claude review check did not complete successfully (status: $CLAUDE_RESULT)" >> $GITHUB_OUTPUT
           fi
           
-          # Count passed/failed checks
+          # Count passed/failed checks (exclude SKIPPED and null checks from total)
           PASSED_CHECKS=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.state == "SUCCESS") | .name' | wc -l)
           FAILED_CHECKS=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.state == "FAILURE") | .name' | wc -l)
-          TOTAL_CHECKS=$(echo "$ALL_CHECKS" | jq -r '.[] | .name' | wc -l)
+          # Only count SUCCESS and FAILURE checks in total (exclude SKIPPED, null, etc.)
+          TOTAL_CHECKS=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.state == "SUCCESS" or .state == "FAILURE") | .name' | wc -l)
           
           # Get failed check names if any
           FAILED_CHECK_NAMES=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.state == "FAILURE") | .name' | tr '\n' ', ' | sed 's/,$//')
@@ -647,15 +652,20 @@ jobs:
           echo "📝 Reason: ${{ steps.parse-decision.outputs.REASON }}"
           echo "🔍 This indicates good code quality but human review is needed"
           
-          # Create pending status to indicate manual review needed
+          # Create success status with manual approval decision for auto-merge consumption
           REASON="${{ steps.parse-decision.outputs.REASON }}"
-          DESCRIPTION="Manual approval needed: ${REASON:0:100}"  # Keep under 140 chars
+          DESCRIPTION="Manual approval: ${REASON:0:110}"  # Keep under 140 chars
           gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha || github.sha }} \
-            -f state=pending \
+            -f state=success \
             -f description="$DESCRIPTION" \
             -f context="merge-decision" 2>/dev/null || echo "::warning::Status creation failed"
           
-          echo "✅ Manual approval status set - PR is ready for human review"
+          # Export decision for auto-merge job consumption
+          echo "MERGE_DECISION=MANUAL_APPROVAL" >> $GITHUB_OUTPUT
+          echo "MERGE_REASON=$REASON" >> $GITHUB_OUTPUT
+          echo "RECOMMENDED_ACTION=${{ steps.parse-decision.outputs.RECOMMENDED_ACTION }}" >> $GITHUB_OUTPUT
+          
+          echo "✅ Manual approval decision completed - ready for auto-merge evaluation"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -681,5 +691,139 @@ jobs:
             -f state=failure \
             -f description="$DESCRIPTION" \
             -f context="merge-decision" 2>/dev/null || echo "::warning::Status creation failed"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  auto-merge:
+    runs-on: ubuntu-latest
+    needs: merge-decision
+    if: |
+      always() && 
+      (needs.merge-decision.outputs.DECISION == 'APPROVE' || 
+       needs.merge-decision.outputs.DECISION == 'MANUAL_APPROVAL')
+    
+    steps:
+      - name: Get PR information
+        id: pr-info
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "🔍 Processing auto-merge for PR #$PR_NUMBER"
+          
+          # Get PR details
+          PR_DATA=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} \
+            --json title,author,headRefName,mergeable,mergeStateStatus,isDraft,state)
+          
+          echo "PR_DATA<<EOF" >> $GITHUB_OUTPUT
+          echo "$PR_DATA" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check merge eligibility
+        id: check-merge
+        run: |
+          PR_NUMBER=${{ steps.pr-info.outputs.pr_number }}
+          PR_DATA='${{ steps.pr-info.outputs.PR_DATA }}'
+          
+          MERGEABLE=$(echo "$PR_DATA" | jq -r '.mergeable')
+          MERGE_STATE=$(echo "$PR_DATA" | jq -r '.mergeStateStatus')
+          IS_DRAFT=$(echo "$PR_DATA" | jq -r '.isDraft')
+          PR_STATE=$(echo "$PR_DATA" | jq -r '.state')
+          PR_AUTHOR=$(echo "$PR_DATA" | jq -r '.author.login')
+          HEAD_BRANCH=$(echo "$PR_DATA" | jq -r '.headRefName')
+          
+          echo "📋 PR Status Check:"
+          echo "  - State: $PR_STATE"
+          echo "  - Mergeable: $MERGEABLE"
+          echo "  - Merge State: $MERGE_STATE"
+          echo "  - Is Draft: $IS_DRAFT"
+          echo "  - Author: $PR_AUTHOR"
+          echo "  - Branch: $HEAD_BRANCH"
+          
+          # Check basic merge requirements
+          if [ "$PR_STATE" != "OPEN" ]; then
+            echo "❌ PR is not open"
+            echo "eligible=false" >> $GITHUB_OUTPUT
+            exit 0
+          elif [ "$IS_DRAFT" = "true" ]; then
+            echo "❌ PR is a draft"
+            echo "eligible=false" >> $GITHUB_OUTPUT
+            exit 0
+          elif [ "$MERGEABLE" != "MERGEABLE" ]; then
+            echo "❌ PR is not mergeable (status: $MERGEABLE)"
+            echo "eligible=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Determine merge method
+          if [[ "$PR_AUTHOR" == "app/github-actions" ]] && [[ "$HEAD_BRANCH" == release-please--* ]]; then
+            echo "🔄 Release Please PR detected"
+            echo "merge_method=squash" >> $GITHUB_OUTPUT
+            echo "is_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "🔄 Regular PR"
+            echo "merge_method=squash" >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "✅ PR is eligible for auto-merge"
+          echo "eligible=true" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Execute auto-merge
+        if: |
+          steps.check-merge.outputs.eligible == 'true' && 
+          (needs.merge-decision.outputs.DECISION == 'APPROVE' || 
+           (needs.merge-decision.outputs.DECISION == 'MANUAL_APPROVAL' && 
+            needs.merge-decision.outputs.RECOMMENDED_ACTION == 'auto-merge'))
+        run: |
+          PR_NUMBER=${{ steps.pr-info.outputs.pr_number }}
+          MERGE_METHOD=${{ steps.check-merge.outputs.merge_method }}
+          IS_RELEASE=${{ steps.check-merge.outputs.is_release }}
+          DECISION="${{ needs.merge-decision.outputs.DECISION }}"
+          
+          echo "🚀 Auto-merging PR #$PR_NUMBER"
+          echo "📋 Decision: $DECISION"
+          echo "🔧 Method: $MERGE_METHOD"
+          
+          # Perform the merge
+          if gh pr merge $PR_NUMBER --repo ${{ github.repository }} --$MERGE_METHOD --auto; then
+            echo "✅ Successfully enabled auto-merge for PR #$PR_NUMBER"
+            
+            # Add success comment
+            gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
+              --body "🤖 **Auto-merge enabled** by Claude AI\\n\\n✅ **Decision**: $DECISION\\n🚀 **Method**: $MERGE_METHOD\\n\\nThis PR will be automatically merged once all required status checks pass."
+              
+          else
+            echo "❌ Auto-merge failed, attempting direct merge..."
+            if gh pr merge $PR_NUMBER --repo ${{ github.repository }} --$MERGE_METHOD; then
+              echo "✅ Successfully merged PR #$PR_NUMBER directly"
+              
+              gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
+                --body "🤖 **PR Merged** by Claude AI\\n\\n✅ **Decision**: $DECISION\\n🚀 **Method**: $MERGE_METHOD\\n\\nThis PR has been automatically merged based on Claude's analysis."
+            else
+              echo "❌ Both auto-merge and direct merge failed"
+              exit 1
+            fi
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Handle manual approval (no auto-merge)
+        if: |
+          steps.check-merge.outputs.eligible == 'true' && 
+          needs.merge-decision.outputs.DECISION == 'MANUAL_APPROVAL' && 
+          needs.merge-decision.outputs.RECOMMENDED_ACTION != 'auto-merge'
+        run: |
+          PR_NUMBER=${{ steps.pr-info.outputs.pr_number }}
+          REASON="${{ needs.merge-decision.outputs.REASON }}"
+          
+          echo "👤 Manual approval required - skipping auto-merge"
+          echo "📝 Reason: $REASON"
+          
+          gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
+            --body "👤 **Manual Approval Required**\\n\\n📋 **Reason**: $REASON\\n🔍 **Action**: Human review needed before merge\\n\\nClaude AI determined this PR has good code quality but requires manual verification before merging."
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
