@@ -1,6 +1,6 @@
 {
   "name": "@neublink/gitplus",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "description": "AI-powered Git automation MCP server for Claude Code",
   "main": "dist/index.js",
   "bin": {
