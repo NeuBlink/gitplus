@@ -51,7 +51,7 @@ jobs:
             echo "Attempt $i of $MAX_ATTEMPTS"
             
             # Get all check runs for this PR
-            CHECKS=$(gh pr checks $PR_NUMBER --repo ${{ github.repository }} --json name,status,conclusion)
+            CHECKS=$(gh pr checks $PR_NUMBER --repo ${{ github.repository }} --json name,state)
             
             # Check if required checks exist and are complete
             REQUIRED_CHECKS=("claude-review" "test (20.x)" "security" "validate-pr")
@@ -59,16 +59,15 @@ jobs:
             ALL_SUCCESS=true
             
             for check in "${REQUIRED_CHECKS[@]}"; do
-              CHECK_STATUS=$(echo "$CHECKS" | jq -r ".[] | select(.name == \"$check\") | .status // \"not_found\"")
-              CHECK_CONCLUSION=$(echo "$CHECKS" | jq -r ".[] | select(.name == \"$check\") | .conclusion // \"not_found\"")
+              CHECK_STATE=$(echo "$CHECKS" | jq -r ".[] | select(.name == \"$check\") | .state // \"not_found\"")
               
-              echo "  $check: status=$CHECK_STATUS, conclusion=$CHECK_CONCLUSION"
+              echo "  $check: state=$CHECK_STATE"
               
-              if [ "$CHECK_STATUS" = "not_found" ] || [ "$CHECK_STATUS" = "queued" ] || [ "$CHECK_STATUS" = "in_progress" ]; then
+              if [ "$CHECK_STATE" = "not_found" ] || [ "$CHECK_STATE" = "PENDING" ] || [ "$CHECK_STATE" = "QUEUED" ] || [ "$CHECK_STATE" = "IN_PROGRESS" ]; then
                 ALL_COMPLETE=false
               fi
               
-              if [ "$CHECK_CONCLUSION" != "success" ] && [ "$CHECK_CONCLUSION" != "not_found" ]; then
+              if [ "$CHECK_STATE" != "SUCCESS" ] && [ "$CHECK_STATE" != "not_found" ]; then
                 ALL_SUCCESS=false
               fi
             done
@@ -146,19 +145,19 @@ jobs:
             | tail -n 1 >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           
-          # Get specific check conclusions
+          # Get specific check states
           TEST_RESULT=$(gh pr checks $PR_NUMBER \
             --repo ${{ github.repository }} \
-            --json name,conclusion \
-            | jq -r '.[] | select(.name == "test (20.x)") | .conclusion // "pending"')
+            --json name,state \
+            | jq -r '.[] | select(.name == "test (20.x)") | .state // "PENDING"')
           SECURITY_RESULT=$(gh pr checks $PR_NUMBER \
             --repo ${{ github.repository }} \
-            --json name,conclusion \
-            | jq -r '.[] | select(.name == "security") | .conclusion // "pending"')
+            --json name,state \
+            | jq -r '.[] | select(.name == "security") | .state // "PENDING"')
           CLAUDE_RESULT=$(gh pr checks $PR_NUMBER \
             --repo ${{ github.repository }} \
-            --json name,conclusion \
-            | jq -r '.[] | select(.name == "claude-review") | .conclusion // "pending"')
+            --json name,state \
+            | jq -r '.[] | select(.name == "claude-review") | .state // "PENDING"')
           
           echo "TEST_CONCLUSION=$TEST_RESULT" >> $GITHUB_OUTPUT
           echo "SECURITY_CONCLUSION=$SECURITY_RESULT" >> $GITHUB_OUTPUT
@@ -205,11 +204,11 @@ jobs:
             
             Rules:
             - decision must be "PASS" or "FAIL" (no other values)
-            - For Release Please PRs: PASS if all checks passed (tests, security, Claude review)
+            - For Release Please PRs: PASS if all checks are SUCCESS (tests, security, Claude review)
             - For regular PRs: FAIL if Claude rejected or found blocking issues
-            - FAIL if tests or security checks failed
+            - FAIL if tests or security checks are not SUCCESS
             - FAIL if PR is not mergeable or has conflicts
-            - PASS only if Claude approved AND all checks passed
+            - PASS only if Claude approved AND all checks are SUCCESS
             
             OUTPUT ONLY THE JSON OBJECT. NOTHING ELSE.
 
