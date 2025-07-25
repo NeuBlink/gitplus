@@ -277,6 +277,7 @@ jobs:
             "CHANGELOG.md"
             "VERSION"
             "version.txt"
+            ".release-please-manifest.json"
           )
           
           VALIDATION_PASSED=true
