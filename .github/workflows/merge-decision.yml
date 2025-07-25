@@ -331,26 +331,40 @@ jobs:
           PR_NUMBER=${{ steps.pr-context.outputs.PR_NUMBER }}
           echo "Searching for Claude review artifacts for PR #$PR_NUMBER"
           
-          # Get list of artifacts and find the most recent Claude review
-          ARTIFACT_NAME=$(gh api repos/${{ github.repository }}/actions/artifacts \
-            --jq ".artifacts[] | select(.name | startswith(\"claude-review-analysis-$PR_NUMBER-\")) | .name" \
-            | head -1)
+          # Get list of artifacts and find the most recent Claude review with run info
+          ARTIFACT_INFO=$(gh api repos/${{ github.repository }}/actions/artifacts \
+            --jq ".artifacts[] | select(.name | startswith(\"claude-review-analysis-$PR_NUMBER-\")) | {name: .name, id: .id, workflow_run: .workflow_run.id} | [.workflow_run, .name, .id] | @csv" \
+            | head -1 | tr -d '"')
           
-          if [ -n "$ARTIFACT_NAME" ]; then
-            echo "Found artifact: $ARTIFACT_NAME"
-            gh run download --repo ${{ github.repository }} --name "$ARTIFACT_NAME" --dir "$MERGE_RUN_DIR/"
+          if [ -n "$ARTIFACT_INFO" ]; then
+            # Parse the CSV: workflow_run_id,artifact_name,artifact_id
+            IFS=',' read -r WORKFLOW_RUN_ID ARTIFACT_NAME ARTIFACT_ID <<< "$ARTIFACT_INFO"
+            echo "Found artifact: $ARTIFACT_NAME (ID: $ARTIFACT_ID, Run: $WORKFLOW_RUN_ID)"
             
-            # Look for the analysis file in the downloaded content
-            if [ -f "$MERGE_RUN_DIR/claude-review-analysis.md" ]; then
-              echo "✅ Successfully downloaded Claude review analysis"
-              echo "analysis_available=true" >> $GITHUB_OUTPUT
-              echo "analysis_path=$MERGE_RUN_DIR/claude-review-analysis.md" >> $GITHUB_OUTPUT
+            # Download using the run ID for better reliability
+            if gh run download $WORKFLOW_RUN_ID --repo ${{ github.repository }} --name "$ARTIFACT_NAME" --dir "$MERGE_RUN_DIR/" 2>/dev/null; then
+              echo "✅ Successfully downloaded artifact from run $WORKFLOW_RUN_ID"
+              
+              # Look for the analysis file in the downloaded content
+              if [ -f "$MERGE_RUN_DIR/claude-review-analysis.md" ]; then
+                echo "✅ Successfully found Claude review analysis file"
+                FILE_SIZE=$(wc -c < "$MERGE_RUN_DIR/claude-review-analysis.md")
+                echo "📄 Analysis file size: $FILE_SIZE bytes"
+                echo "analysis_available=true" >> $GITHUB_OUTPUT
+                echo "analysis_path=$MERGE_RUN_DIR/claude-review-analysis.md" >> $GITHUB_OUTPUT
+              else
+                echo "⚠️ Artifact downloaded but analysis file not found"
+                ls -la "$MERGE_RUN_DIR/"  # Debug: show what was downloaded
+                echo "analysis_available=false" >> $GITHUB_OUTPUT
+              fi
             else
-              echo "⚠️ Artifact downloaded but analysis file not found"
+              echo "❌ Failed to download artifact $ARTIFACT_NAME"
               echo "analysis_available=false" >> $GITHUB_OUTPUT
             fi
           else
             echo "⚠️ No Claude review artifact found for PR #$PR_NUMBER"
+            echo "📋 Available artifacts:"
+            gh api repos/${{ github.repository }}/actions/artifacts --jq ".artifacts[] | select(.name | contains(\"claude\")) | .name" | head -5
             echo "analysis_available=false" >> $GITHUB_OUTPUT
           fi
         env:
@@ -489,6 +503,22 @@ jobs:
             ## Your Task
             Based on the complete context above, **especially Claude's detailed review analysis**, decide whether this PR should be merged.
 
+            **CRITICAL: You MUST first analyze and highlight Claude's key findings:**
+
+            1. **Summarize Claude's Key Findings**: Extract and highlight the most important findings from Claude's review:
+               - Security concerns (if any)
+               - Code quality issues (if any)
+               - Performance considerations (if any)
+               - Test coverage concerns (if any)
+               - Best practices violations (if any)
+               - Overall approval/rejection recommendation
+
+            2. **Highlight Claude's Specific Recommendations**: Clearly state what Claude specifically recommended:
+               - Does Claude approve the changes?
+               - Does Claude request specific changes?
+               - Does Claude identify blocking issues?
+               - Does Claude suggest improvements?
+
             **Decision Rules** (in priority order):
             1. **Claude Review Override**: If the Claude review above contains "DO NOT MERGE", "REJECT", or explicitly recommends against merging → REJECT
             2. **Critical CI Failures**: If any critical CI checks failed → REJECT
@@ -507,6 +537,25 @@ jobs:
             - All/most CI checks pass but needs human verification
             - Minor workflow issues that don't indicate code problems
             - Uncertainty that doesn't stem from actual code issues
+
+            **Your Analysis Format**: Start your response with:
+            ```
+            ## Claude Review Analysis Summary
+
+            **Key Findings from Claude Code Review:**
+            - [Highlight main findings here]
+            
+            **Claude's Specific Recommendations:**
+            - [Summarize Claude's recommendations here]
+            
+            **Security Concerns:** [Any security issues identified]
+            **Code Quality:** [Code quality assessment]
+            **Test Coverage:** [Test-related findings]
+            
+            ## Merge Decision Analysis
+            
+            Based on Claude's review and CI status, my decision is...
+            ```
 
             **CRITICAL: You MUST respond with valid JSON in this exact format:**
             ```json
@@ -798,7 +847,15 @@ jobs:
           if [ "$PR_STATUS" != "CLEAN" ] && [ "$PR_STATUS" != "UNSTABLE" ]; then
             echo "❌ PR is not in a mergeable state: $PR_STATUS"
             gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
-              --body "⚠️ **Auto-merge Blocked**\\n\\n❌ **Issue**: PR merge state is '$PR_STATUS'\\n✅ **Decision**: $DECISION was approved\\n\\n**Resolution**: Ensure all required checks pass and conflicts are resolved, then try manual merge."
+              --body "$(cat <<EOF
+⚠️ **Auto-merge Blocked**
+
+❌ **Issue**: PR merge state is '$PR_STATUS'
+✅ **Decision**: $DECISION was approved
+
+**Resolution**: Ensure all required checks pass and conflicts are resolved, then try manual merge.
+EOF
+)"
             exit 0
           fi
           
@@ -811,7 +868,15 @@ jobs:
             echo "📋 Auto-merge output: $AUTO_MERGE_OUTPUT"
             
             gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
-              --body "🤖 **Auto-merge Enabled** by Claude AI\\n\\n✅ **Decision**: $DECISION\\n🚀 **Method**: $MERGE_METHOD\\n\\nThis PR will be automatically merged once all required status checks pass."
+              --body "$(cat <<EOF
+🤖 **Auto-merge Enabled** by Claude AI
+
+✅ **Decision**: $DECISION
+🚀 **Method**: $MERGE_METHOD
+
+This PR will be automatically merged once all required status checks pass.
+EOF
+)"
               
           else
             echo "⚠️ Auto-merge failed: $AUTO_MERGE_OUTPUT"
@@ -825,7 +890,15 @@ jobs:
               echo "📋 Direct merge output: $DIRECT_MERGE_OUTPUT"
               
               gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
-                --body "🤖 **PR Merged** by Claude AI\\n\\n✅ **Decision**: $DECISION\\n🚀 **Method**: $MERGE_METHOD\\n\\nThis PR has been automatically merged."
+                --body "$(cat <<EOF
+🤖 **PR Merged** by Claude AI
+
+✅ **Decision**: $DECISION
+🚀 **Method**: $MERGE_METHOD
+
+This PR has been automatically merged.
+EOF
+)"
                 
             else
               echo "❌ Direct merge also failed: $DIRECT_MERGE_OUTPUT"
@@ -847,7 +920,20 @@ jobs:
               fi
               
               gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
-                --body "⚠️ **Auto-merge Failed**\\n\\n✅ **Decision**: $DECISION (approved by Claude AI)\\n❌ **Issue**: $FAILURE_REASON\\n\\n**Error Details:**\\n\\\`\\\`\\\`\\n$DIRECT_MERGE_OUTPUT\\n\\\`\\\`\\\`\\n\\n**Manual Action Required**: Please merge this PR manually or review repository settings."
+                --body "$(cat <<EOF
+⚠️ **Auto-merge Failed**
+
+✅ **Decision**: $DECISION (approved by Claude AI)
+❌ **Issue**: $FAILURE_REASON
+
+**Error Details:**
+\`\`\`
+$DIRECT_MERGE_OUTPUT
+\`\`\`
+
+**Manual Action Required**: Please merge this PR manually or review repository settings.
+EOF
+)"
               
               # Set output but don't fail the workflow
               echo "auto_merge_failed=true" >> $GITHUB_OUTPUT
@@ -869,7 +955,33 @@ jobs:
           echo "👤 Manual approval required - skipping auto-merge"
           echo "📝 Reason: $REASON"
           
-          gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
-            --body "👤 **Manual Approval Required**\\n\\n📋 **Reason**: $REASON\\n🔍 **Action**: Human review needed before merge\\n\\nClaude AI determined this PR has good code quality but requires manual verification before merging."
+          # Create the comment body
+          COMMENT_BODY="$(cat <<EOF
+👤 **Manual Approval Required**
+
+📋 **Reason**: $REASON
+🔍 **Action**: Human review needed before merge
+
+Claude AI determined this PR has good code quality but requires manual verification before merging.
+
+---
+*🤖 This is an automated comment that gets updated on new pushes*
+EOF
+)"
+          
+          # Check for existing manual approval comment and update it (sticky behavior)
+          EXISTING_COMMENT_ID=$(gh api repos/${{ github.repository }}/issues/$PR_NUMBER/comments \
+            --jq '.[] | select(.body | contains("Manual Approval Required") and contains("automated comment that gets updated")) | .id' \
+            | head -1)
+          
+          if [ -n "$EXISTING_COMMENT_ID" ] && [ "$EXISTING_COMMENT_ID" != "null" ]; then
+            echo "🔄 Updating existing manual approval comment (ID: $EXISTING_COMMENT_ID)"
+            gh api repos/${{ github.repository }}/issues/comments/$EXISTING_COMMENT_ID \
+              --method PATCH \
+              --field body="$COMMENT_BODY"
+          else
+            echo "📝 Creating new manual approval comment"
+            gh pr comment $PR_NUMBER --repo ${{ github.repository }} --body "$COMMENT_BODY"
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
