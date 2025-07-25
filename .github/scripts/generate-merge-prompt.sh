@@ -43,8 +43,12 @@ cat << 'EOF'
 ## Claude Code Review Analysis:
 EOF
 
-# Safely output Claude review content to prevent command injection
-printf -- "%s\n" "${CLAUDE_REVIEW_CONTENT}"
+# Read Claude review content from file to prevent command injection
+if [ -n "${CLAUDE_REVIEW_FILE}" ] && [ -f "${CLAUDE_REVIEW_FILE}" ]; then
+  cat "${CLAUDE_REVIEW_FILE}"
+else
+  echo "ERROR: Claude review content not available"
+fi
 
 cat << 'EOF'
 

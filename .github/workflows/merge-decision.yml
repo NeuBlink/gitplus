@@ -692,7 +692,15 @@ jobs:
           CLAUDE_REVIEW_CONCLUSION="${{ steps.pr-context.outputs.CLAUDE_REVIEW_CONCLUSION }}"
           FAILED_CHECKS="${{ steps.pr-context.outputs.FAILED_CHECKS }}"
           WORKFLOW_FAILURE_ANALYSIS="${{ steps.pr-context.outputs.WORKFLOW_FAILURE_ANALYSIS }}"
-          CLAUDE_REVIEW_CONTENT="${{ steps.load-claude-review.outputs.CLAUDE_REVIEW_CONTENT }}"
+          
+          # Write Claude review content to temporary file to prevent command injection
+          CLAUDE_REVIEW_FILE="/tmp/claude-review-content.txt"
+          cat > "$CLAUDE_REVIEW_FILE" << 'EOF'
+          ${{ steps.load-claude-review.outputs.CLAUDE_REVIEW_CONTENT }}
+          EOF
+          
+          # Export the file path for the script to use
+          export CLAUDE_REVIEW_FILE
           
           # Generate the prompt file
           .github/scripts/generate-merge-prompt.sh > /tmp/merge-prompt.md
