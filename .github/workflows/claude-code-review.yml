@@ -116,17 +116,15 @@ jobs:
             fi
           else
             echo "⚠️ No substantial Claude review comment found, creating placeholder"
-            cat > "$RUN_DIR/claude-review-analysis.md" << 'PLACEHOLDER_EOF'
-# Claude Code Review - No Content Captured
-
-⚠️ Claude review content was not successfully captured from the PR comments. 
-This could be due to:
-- Review still in progress
-- Comment not yet posted
-- API timing issues
-
-The merge decision workflow should use fallback methods to access the review content.
-PLACEHOLDER_EOF
+            echo "# Claude Code Review - No Content Captured" > "$RUN_DIR/claude-review-analysis.md"
+            echo "" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "⚠️ Claude review content was not successfully captured from the PR comments." >> "$RUN_DIR/claude-review-analysis.md"
+            echo "This could be due to:" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "- Review still in progress" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "- Comment not yet posted" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "- API timing issues" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "The merge decision workflow should use fallback methods to access the review content." >> "$RUN_DIR/claude-review-analysis.md"
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
