@@ -184,27 +184,17 @@ jobs:
             echo "🤖 Release Please PR detected - skipping Claude review requirement"
             echo "CLAUDE_REVIEW_CONTENT=Release Please PR: Code review bypassed for automated release" >> $GITHUB_OUTPUT
             CLAUDE_RESULT="SKIPPED_RELEASE"
-          elif [ "$CLAUDE_RESULT" = "SUCCESS" ] && [ "${{ steps.validate-review.outputs.review_valid }}" = "true" ]; then
-            echo "🔍 Loading validated Claude review from artifact file..."
-            
-            ANALYSIS_FILE="${{ steps.download-review.outputs.analysis_path }}"
-            echo "✅ Using validated Claude review analysis file at: $ANALYSIS_FILE"
-            CLAUDE_REVIEW_CONTENT=$(cat "$ANALYSIS_FILE")
-            FILE_SIZE=$(wc -c < "$ANALYSIS_FILE")
-            echo "📄 Review file size: $FILE_SIZE characters"
-            echo "📝 Review preview: ${CLAUDE_REVIEW_CONTENT:0:200}..."
-            
-            echo "CLAUDE_REVIEW_CONTENT<<EOF" >> $GITHUB_OUTPUT
-            echo "$CLAUDE_REVIEW_CONTENT" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
+          elif [ "$CLAUDE_RESULT" = "SUCCESS" ]; then
+            echo "🔍 Claude review workflow completed successfully"
+            echo "⏳ Claude review content validation will be handled after artifact download"
+            echo "CLAUDE_REVIEW_CONTENT=PENDING_VALIDATION" >> $GITHUB_OUTPUT
           else
-            echo "❌ ERROR: Claude review required but not available or invalid"
+            echo "❌ ERROR: Claude review required but workflow failed"
             echo "Claude Code Review is mandatory for all non-Release-Please PRs"
             echo "Review status: $CLAUDE_RESULT"
-            echo "Validation status: ${{ steps.validate-review.outputs.review_valid }}"
             
             # Fail the workflow - no fallbacks
-            echo "CLAUDE_REVIEW_CONTENT=ERROR: Claude review validation failed. This PR cannot proceed without a valid code review." >> $GITHUB_OUTPUT
+            echo "CLAUDE_REVIEW_CONTENT=ERROR: Claude review workflow failed. This PR cannot proceed without a valid code review." >> $GITHUB_OUTPUT
             exit 1
           fi
           
@@ -424,6 +414,33 @@ jobs:
           echo "✅ Claude review validation passed"
           echo "review_valid=true" >> $GITHUB_OUTPUT
 
+      - name: Load validated Claude review content
+        id: load-claude-review
+        run: |
+          if [ "${{ steps.pr-context.outputs.IS_RELEASE_PLEASE }}" = "true" ]; then
+            echo "🤖 Release Please PR - using bypassed review content"
+            echo "CLAUDE_REVIEW_CONTENT=Release Please PR: Code review bypassed for automated release" >> $GITHUB_OUTPUT
+          else
+            echo "📄 Loading validated Claude review content..."
+            
+            if [ "${{ steps.validate-review.outputs.review_valid }}" = "true" ]; then
+              ANALYSIS_FILE="${{ steps.download-review.outputs.analysis_path }}"
+              echo "✅ Using validated Claude review analysis file at: $ANALYSIS_FILE"
+              CLAUDE_REVIEW_CONTENT=$(cat "$ANALYSIS_FILE")
+              FILE_SIZE=$(wc -c < "$ANALYSIS_FILE")
+              echo "📄 Review file size: $FILE_SIZE characters"
+              echo "📝 Review preview: ${CLAUDE_REVIEW_CONTENT:0:200}..."
+              
+              echo "CLAUDE_REVIEW_CONTENT<<EOF" >> $GITHUB_OUTPUT
+              echo "$CLAUDE_REVIEW_CONTENT" >> $GITHUB_OUTPUT
+              echo "EOF" >> $GITHUB_OUTPUT
+            else
+              echo "❌ ERROR: Claude review validation failed - cannot proceed"
+              echo "CLAUDE_REVIEW_CONTENT=ERROR: Claude review validation failed. This PR cannot proceed without a valid code review." >> $GITHUB_OUTPUT
+              exit 1
+            fi
+          fi
+
       - name: Prepare decision environment
         run: |
           # Ensure /tmp is writable and create decision template
@@ -554,7 +571,7 @@ jobs:
             ## Complete Claude Code Review Analysis
             **IMPORTANT: This is the full Claude review content that must guide your decision:**
             
-            ${{ steps.pr-context.outputs.CLAUDE_REVIEW_CONTENT }}
+            ${{ steps.load-claude-review.outputs.CLAUDE_REVIEW_CONTENT }}
             
             ## Your Task
             Based on the complete context above, **especially Claude's detailed review analysis**, decide whether this PR should be merged.
