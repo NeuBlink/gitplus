@@ -19,6 +19,7 @@ permissions:
   issues: read
   actions: read
   checks: read
+  statuses: write  # Required for creating commit status checks
   id-token: write
 
 jobs:
@@ -219,38 +220,136 @@ jobs:
 
       - name: Parse and apply decision
         run: |
-          echo "Waiting for Claude's response..."
-          sleep 10
+          set -e  # Exit on error
           
-          # Get the latest comment from Claude
-          CLAUDE_RESPONSE=$(gh pr view ${{ steps.pr-context.outputs.PR_NUMBER }} \
-            --repo ${{ github.repository }} \
-            --json comments \
-            --jq '.comments[-1] | select(.author.login == "claude") | .body' || echo "")
+          echo "🔍 Waiting for Claude's response (with retries)..."
           
-          if [ -z "$CLAUDE_RESPONSE" ]; then
-            echo "::error::No response from Claude merge decider"
-            exit 1
+          # Function to fetch Claude response with retries
+          fetch_claude_response() {
+            local attempt=1
+            local max_attempts=5
+            local wait_time=15
+            
+            while [ $attempt -le $max_attempts ]; do
+              echo "Attempt $attempt/$max_attempts: Fetching Claude response..."
+              
+              CLAUDE_RESPONSE=$(gh pr view ${{ steps.pr-context.outputs.PR_NUMBER }} \
+                --repo ${{ github.repository }} \
+                --json comments \
+                --jq '.comments[-1] | select(.author.login == "claude") | .body' 2>/dev/null || echo "")
+              
+              if [ -n "$CLAUDE_RESPONSE" ] && [ "$CLAUDE_RESPONSE" != "null" ]; then
+                echo "✅ Found Claude response (length: ${#CLAUDE_RESPONSE} chars)"
+                echo "📝 Claude response preview:"
+                echo "$CLAUDE_RESPONSE" | head -5
+                return 0
+              fi
+              
+              if [ $attempt -lt $max_attempts ]; then
+                echo "❌ No Claude response found, waiting ${wait_time}s before retry..."
+                sleep $wait_time
+              fi
+              
+              attempt=$((attempt + 1))
+            done
+            
+            echo "❌ Failed to get Claude response after $max_attempts attempts"
+            return 1
+          }
+          
+          # Try to get Claude response
+          if ! fetch_claude_response; then
+            echo "⚠️ Claude response not available, falling back to check-based decision..."
+            
+            # Fallback: Make decision based on check states only
+            if [ "${{ steps.pr-context.outputs.TEST_CONCLUSION }}" = "SUCCESS" ] && \
+               [ "${{ steps.pr-context.outputs.SECURITY_CONCLUSION }}" = "SUCCESS" ] && \
+               [ "${{ steps.pr-context.outputs.CLAUDE_REVIEW_CONCLUSION }}" = "SUCCESS" ]; then
+              DECISION="PASS"
+              CONFIDENCE="80"
+              SUMMARY="All checks passed (fallback decision - Claude response unavailable)"
+            else
+              DECISION="FAIL"
+              CONFIDENCE="90"
+              SUMMARY="Some checks failed (fallback decision - Claude response unavailable)"
+            fi
+          else
+            echo "🔍 Parsing Claude response..."
+            
+            # Advanced JSON extraction with multiple strategies
+            extract_json() {
+              local response="$1"
+              local json=""
+              
+              # Strategy 1: JSON code block
+              json=$(echo "$response" | sed -n '/```json/,/```/p' | grep -v '```' | tr -d '\n' | head -1)
+              if [ -n "$json" ] && echo "$json" | jq . >/dev/null 2>&1; then
+                echo "$json"
+                return 0
+              fi
+              
+              # Strategy 2: Find JSON object
+              json=$(echo "$response" | grep -o '{[^{}]*"decision"[^{}]*}' | head -1)
+              if [ -n "$json" ] && echo "$json" | jq . >/dev/null 2>&1; then
+                echo "$json"
+                return 0
+              fi
+              
+              # Strategy 3: Multiline JSON extraction
+              json=$(echo "$response" | sed -n '/{/,/}/p' | tr '\n' ' ' | head -1)
+              if [ -n "$json" ] && echo "$json" | jq . >/dev/null 2>&1; then
+                echo "$json"
+                return 0
+              fi
+              
+              # Strategy 4: Look for decision keywords
+              if echo "$response" | grep -qi "decision.*PASS"; then
+                echo '{"decision":"PASS","confidence":70,"summary":"Parsed from text (PASS found)"}'
+                return 0
+              elif echo "$response" | grep -qi "decision.*FAIL"; then
+                echo '{"decision":"FAIL","confidence":70,"summary":"Parsed from text (FAIL found)"}'
+                return 0
+              fi
+              
+              return 1
+            }
+            
+            JSON_RESPONSE=$(extract_json "$CLAUDE_RESPONSE")
+            
+            if [ -z "$JSON_RESPONSE" ]; then
+              echo "⚠️ Failed to extract JSON, using fallback decision..."
+              DECISION="FAIL"
+              CONFIDENCE="50"
+              SUMMARY="Could not parse Claude response - manual review needed"
+            else
+              echo "✅ Extracted JSON: $JSON_RESPONSE"
+              
+              # Parse with validation
+              DECISION=$(echo "$JSON_RESPONSE" | jq -r '.decision' 2>/dev/null || echo "")
+              CONFIDENCE=$(echo "$JSON_RESPONSE" | jq -r '.confidence' 2>/dev/null || echo "0")
+              SUMMARY=$(echo "$JSON_RESPONSE" | jq -r '.summary' 2>/dev/null || echo "No summary available")
+              
+              # Validate extracted values
+              if [ -z "$DECISION" ] || [ "$DECISION" = "null" ]; then
+                echo "⚠️ Invalid decision value, using fallback..."
+                DECISION="FAIL"
+                CONFIDENCE="50"
+                SUMMARY="Invalid Claude response format - manual review needed"
+              fi
+            fi
           fi
           
-          # Extract JSON from the response
-          JSON_RESPONSE=$(echo "$CLAUDE_RESPONSE" | sed -n '/```json/,/```/p' | grep -v '```' | tr -d '\n')
-          if [ -z "$JSON_RESPONSE" ]; then
-            JSON_RESPONSE=$(echo "$CLAUDE_RESPONSE" | grep -o '{[^}]*}' | head -1)
-          fi
-          if [ -z "$JSON_RESPONSE" ]; then
-            JSON_RESPONSE=$(echo "$CLAUDE_RESPONSE" | sed -n 's/.*\({.*}\).*/\1/p')
+          # Normalize confidence
+          if [ -z "$CONFIDENCE" ] || [ "$CONFIDENCE" = "null" ] || ! [[ "$CONFIDENCE" =~ ^[0-9]+$ ]]; then
+            CONFIDENCE="50"
           fi
           
-          # Parse the decision
-          DECISION=$(echo "$JSON_RESPONSE" | jq -r '.decision' 2>/dev/null || echo "ERROR")
-          CONFIDENCE=$(echo "$JSON_RESPONSE" | jq -r '.confidence' 2>/dev/null || echo "0")
-          SUMMARY=$(echo "$JSON_RESPONSE" | jq -r '.summary' 2>/dev/null || echo "No summary provided")
+          echo "📊 Final Decision:"
+          echo "   Decision: $DECISION"
+          echo "   Confidence: $CONFIDENCE%"
+          echo "   Summary: $SUMMARY"
           
-          echo "Decision: $DECISION"
-          echo "Confidence: $CONFIDENCE"
-          echo "Summary: $SUMMARY"
-          
+          # Apply the decision
           if [ "$DECISION" = "PASS" ]; then
             echo "::notice::✅ Merge Decision: PASS (Confidence: $CONFIDENCE%)"
             echo "::notice::$SUMMARY"
@@ -259,29 +358,40 @@ jobs:
             if [ "${{ steps.pr-context.outputs.IS_RELEASE_PLEASE }}" = "true" ]; then
               echo "::notice::🚀 Auto-merging Release Please PR"
               
-              gh pr merge ${{ steps.pr-context.outputs.PR_NUMBER }} \
+              if gh pr merge ${{ steps.pr-context.outputs.PR_NUMBER }} \
                 --repo ${{ github.repository }} \
                 --auto \
-                --squash \
-                || echo "::warning::Failed to enable auto-merge. PR may need manual merge."
+                --squash; then
+                echo "✅ Auto-merge enabled successfully"
+              else
+                echo "::warning::Failed to enable auto-merge. PR may need manual merge."
+              fi
             fi
             
-            # Create success status check
-            gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha || github.sha }} \
+            # Create success status check (non-blocking)
+            if gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha || github.sha }} \
               -f state=success \
               -f description="$SUMMARY" \
-              -f context="merge-decision"
+              -f context="merge-decision" 2>/dev/null; then
+              echo "✅ Success status created"
+            else
+              echo "::warning::Failed to create success status check, but continuing..."
+            fi
             
             exit 0
           else
             echo "::error::❌ Merge Decision: FAIL (Confidence: $CONFIDENCE%)"
             echo "::error::$SUMMARY"
             
-            # Create failure status check
-            gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha || github.sha }} \
+            # Create failure status check (non-blocking)
+            if gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha || github.sha }} \
               -f state=failure \
               -f description="$SUMMARY" \
-              -f context="merge-decision"
+              -f context="merge-decision" 2>/dev/null; then
+              echo "✅ Failure status created"
+            else
+              echo "::warning::Failed to create failure status check, but continuing..."
+            fi
             
             exit 1
           fi
