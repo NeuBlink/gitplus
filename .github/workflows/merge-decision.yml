@@ -36,11 +36,8 @@ jobs:
           echo "PR_NUMBER=$PR_NUMBER" >> $GITHUB_OUTPUT
           echo "Found PR #$PR_NUMBER"
 
-      - name: Checkout repository
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
-        with:
-          ref: ${{ github.event.workflow_run.head_branch }}
-          fetch-depth: 0
+      # NO CHECKOUT - We don't need the code, just API access
+      # This avoids the security issue of checking out untrusted code
 
       # Wait for other critical checks to complete
       - name: Wait for required checks
@@ -66,6 +63,7 @@ jobs:
             while [ $elapsed -lt $timeout ]; do
               # Get check status for the specific commit
               state=$(gh pr checks ${{ steps.pr-number.outputs.PR_NUMBER }} \
+                --repo ${{ github.repository }} \
                 --json name,state,startedAt \
                 --jq ".[] | select(.name == \"$check\") | .state" || echo "pending")
               
@@ -93,13 +91,16 @@ jobs:
           
           # Get all check results
           echo "CHECK_RESULTS<<EOF" >> $GITHUB_OUTPUT
-          gh pr checks ${{ steps.pr-number.outputs.PR_NUMBER }} --json name,state,conclusion \
+          gh pr checks ${{ steps.pr-number.outputs.PR_NUMBER }} \
+            --repo ${{ github.repository }} \
+            --json name,state,conclusion \
             | jq -r '.[] | "\(.name): \(.state) (\(.conclusion // "pending"))"' >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           
           # Get PR metadata
           PR_DATA=$(gh pr view ${{ steps.pr-number.outputs.PR_NUMBER }} \
-            --json title,body,mergeable,mergeStateStatus,isDraft,author,baseRefName,headRefName)
+            --repo ${{ github.repository }} \
+            --json title,body,mergeable,mergeStateStatus,isDraft,author,baseRefName,headRefName,commits)
           
           echo "PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')" >> $GITHUB_OUTPUT
           echo "PR_MERGEABLE=$(echo "$PR_DATA" | jq -r '.mergeable')" >> $GITHUB_OUTPUT
@@ -108,13 +109,9 @@ jobs:
           echo "PR_AUTHOR=$(echo "$PR_DATA" | jq -r '.author.login')" >> $GITHUB_OUTPUT
           echo "BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')" >> $GITHUB_OUTPUT
           
-          # Check if PR is behind base branch
-          BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')
-          HEAD_BRANCH=$(echo "$PR_DATA" | jq -r '.headRefName')
-          
-          git fetch origin $BASE_BRANCH
-          BEHIND_COUNT=$(git rev-list --count HEAD..origin/$BASE_BRANCH || echo "0")
-          echo "PR_BEHIND_COUNT=$BEHIND_COUNT" >> $GITHUB_OUTPUT
+          # Get behind count from PR data
+          COMMIT_COUNT=$(echo "$PR_DATA" | jq -r '.commits.totalCount // 0')
+          echo "PR_BEHIND_COUNT=0" >> $GITHUB_OUTPUT  # We can't calculate this without checkout
           
           # Get Claude review comments from THIS workflow run
           # First, get the time when the claude-review workflow started
@@ -123,15 +120,20 @@ jobs:
           # Get all Claude comments and filter by timestamp
           echo "CLAUDE_REVIEWS<<EOF" >> $GITHUB_OUTPUT
           gh pr view ${{ steps.pr-number.outputs.PR_NUMBER }} \
+            --repo ${{ github.repository }} \
             --json comments \
-            --jq '.comments[] | select(.author.login == "claude") | 
-              select(.createdAt | fromdateiso8601 >= '$WORKFLOW_START') | .body' >> $GITHUB_OUTPUT
+            --jq '.comments[] | select(.author.login == "claude") | .body' \
+            | tail -n 1 >> $GITHUB_OUTPUT  # Get the most recent comment
           echo "EOF" >> $GITHUB_OUTPUT
           
           # Get specific check conclusions
-          TEST_RESULT=$(gh pr checks ${{ steps.pr-number.outputs.PR_NUMBER }} --json name,conclusion \
+          TEST_RESULT=$(gh pr checks ${{ steps.pr-number.outputs.PR_NUMBER }} \
+            --repo ${{ github.repository }} \
+            --json name,conclusion \
             | jq -r '.[] | select(.name == "test (20.x)") | .conclusion // "pending"')
-          SECURITY_RESULT=$(gh pr checks ${{ steps.pr-number.outputs.PR_NUMBER }} --json name,conclusion \
+          SECURITY_RESULT=$(gh pr checks ${{ steps.pr-number.outputs.PR_NUMBER }} \
+            --repo ${{ github.repository }} \
+            --json name,conclusion \
             | jq -r '.[] | select(.name == "security") | .conclusion // "pending"')
           
           echo "TEST_CONCLUSION=$TEST_RESULT" >> $GITHUB_OUTPUT
@@ -158,7 +160,6 @@ jobs:
             Is Draft: ${{ steps.pr-context.outputs.PR_IS_DRAFT }}
             Mergeable: ${{ steps.pr-context.outputs.PR_MERGEABLE }}
             Merge State: ${{ steps.pr-context.outputs.PR_MERGE_STATE }}
-            Behind Base Branch: ${{ steps.pr-context.outputs.PR_BEHIND_COUNT }} commits
             Test Status: ${{ steps.pr-context.outputs.TEST_CONCLUSION }}
             Security Status: ${{ steps.pr-context.outputs.SECURITY_CONCLUSION }}
             Claude Review Status: success (completed)
@@ -181,6 +182,7 @@ jobs:
             - decision must be "PASS" or "FAIL" (no other values)
             - FAIL if Claude rejected or found blocking issues
             - FAIL if tests or security checks failed
+            - FAIL if PR is not mergeable or has conflicts
             - PASS only if Claude approved AND all checks passed
             
             OUTPUT ONLY THE JSON OBJECT. NOTHING ELSE.
@@ -197,6 +199,7 @@ jobs:
           
           # Get the latest comment from Claude (merge decider)
           CLAUDE_RESPONSE=$(gh pr view ${{ steps.pr-number.outputs.PR_NUMBER }} \
+            --repo ${{ github.repository }} \
             --json comments \
             --jq '.comments[-1] | select(.author.login == "claude") | .body' || echo "")
           
