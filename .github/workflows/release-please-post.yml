@@ -149,11 +149,11 @@ jobs:
           # Add and commit the updated package-lock.json
           git add package-lock.json
           git commit -m "chore: update package-lock.json for version ${NEW_VERSION}
-
-- Updated package-lock.json to match package.json version ${NEW_VERSION}
-- This ensures consistent dependency resolution across environments
-
-Co-authored-by: release-please[bot] <55107282+release-please[bot]@users.noreply.github.com>"
+          
+          - Updated package-lock.json to match package.json version ${NEW_VERSION}
+          - This ensures consistent dependency resolution across environments
+          
+          Co-authored-by: release-please[bot] <55107282+release-please[bot]@users.noreply.github.com>"
           
           # Push the changes back to the Release Please branch using safe reference
           git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${HEAD_BRANCH}"

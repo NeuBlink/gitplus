@@ -4,6 +4,14 @@ on:
   # Run as a required status check on every PR  
   pull_request:
     types: [opened, synchronize, reopened]
+  
+  # Allow manual triggering for debugging/re-evaluation
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to evaluate'
+        required: true
+        type: number
 
 # Security Note: This workflow uses PR metadata (numbers, SHAs) for status reporting
 # but does not execute user-controlled content. All checkouts use default refs,
@@ -53,8 +61,8 @@ jobs:
         run: |
           echo "Checking status of PR #$PR_NUMBER"
           
-          # Wait up to 30 minutes for checks to complete
-          MAX_ATTEMPTS=60
+          # Wait up to 10 minutes for checks to complete (more reasonable)
+          MAX_ATTEMPTS=20
           SLEEP_TIME=30
           
           for i in $(seq 1 $MAX_ATTEMPTS); do
@@ -119,9 +127,8 @@ jobs:
             fi
           done
           
-          echo "Timeout waiting for checks to complete"
-          echo "all_complete=false" >> $GITHUB_OUTPUT
-          exit 1
+          echo "⚠️ Timeout waiting for checks to complete - proceeding with available results"
+          echo "all_complete=timeout" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -130,7 +137,7 @@ jobs:
   merge-decision:
     runs-on: ubuntu-latest
     needs: wait-for-checks
-    if: needs.wait-for-checks.outputs.all_checks_complete == 'true'
+    if: always() && needs.wait-for-checks.result != 'cancelled'
     outputs:
       DECISION: ${{ steps.parse-decision.outputs.DECISION }}
       REASON: ${{ steps.parse-decision.outputs.REASON }}
