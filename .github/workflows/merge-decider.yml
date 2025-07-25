@@ -45,6 +45,16 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           timeoutSeconds: 600
           intervalSeconds: 10
+      
+      - name: Wait for Claude review to complete
+        uses: fountainhead/action-wait-for-check@5a908a24814494009c4bb27c242ea38c93c593be # v1.2.0
+        id: wait-for-claude-review
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          checkName: code-review
+          ref: ${{ github.event.pull_request.head.sha }}
+          timeoutSeconds: 1200
+          intervalSeconds: 15
 
       - name: Collect PR context
         id: pr-context
@@ -64,6 +74,32 @@ jobs:
           # Check CI status
           echo "TEST_STATUS=${{ steps.wait-for-tests.outputs.status }}" >> $GITHUB_OUTPUT
           echo "SECURITY_STATUS=${{ steps.wait-for-security.outputs.status }}" >> $GITHUB_OUTPUT
+          echo "CLAUDE_REVIEW_STATUS=${{ steps.wait-for-claude-review.outputs.status }}" >> $GITHUB_OUTPUT
+      
+      - name: Fetch Claude review comments
+        id: fetch-claude-comments
+        run: |
+          echo "Fetching Claude's review comments..."
+          
+          # Fetch all comments from the PR
+          gh pr view ${{ github.event.pull_request.number }} \
+            --json comments \
+            --jq '.comments[] | select(.author.login == "claude") | .body' \
+            > claude_comments.txt || true
+          
+          # Get the latest Claude comment (last one in the file)
+          if [ -s claude_comments.txt ]; then
+            echo "Found Claude review comments"
+            # Store all Claude comments for context
+            echo "CLAUDE_COMMENTS<<EOF" >> $GITHUB_OUTPUT
+            cat claude_comments.txt >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "No Claude comments found yet"
+            echo "CLAUDE_COMMENTS=No Claude review comments found" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: AI Merge Decision Analysis
         id: merge-decision
@@ -77,16 +113,20 @@ jobs:
             
             You are a merge decider for the gitplus repository. Analyze this PR and make a **PASS/FAIL decision** based on:
             
-            1. **Claude Code review findings** (if available)
+            1. **Claude Code review findings** (provided below)
             2. **CI/CD results**: Test Status = ${{ steps.pr-context.outputs.TEST_STATUS }}, Security Status = ${{ steps.pr-context.outputs.SECURITY_STATUS }}
             3. **Code quality and changes**
             
             PR Title: ${{ steps.pr-context.outputs.PR_TITLE }}
             
+            ## Claude Code Review Comments
+            
+            ${{ steps.fetch-claude-comments.outputs.CLAUDE_COMMENTS }}
+            
             ## Decision Rules
-            - **FAIL if**: Claude Code review recommends against merging OR critical issues found
-            - **PASS if**: Code looks good and no blocking issues
-            - Provide specific, actionable feedback for failures
+            - **FAIL if**: Claude Code review recommends against merging OR critical issues found OR tests/security checks failed
+            - **PASS if**: Claude Code review approves (look for "✅ Approve", "✅ Strongly Approve", or "PASS" in the review) AND all checks pass
+            - Parse Claude's review carefully - look for their final verdict/recommendation
             
             ## Required Output Format
             
@@ -109,10 +149,15 @@ jobs:
             **PR Author:** [Use PR_AUTHOR env var]
             
             ### 🎯 Analysis Summary
-            [Brief summary of your analysis]
+            [Brief summary of your analysis including key points from Claude's review]
+            
+            ### 📊 Review Assessment
+            **Previous Claude Code Reviews**: [Summarize Claude's verdict]
+            **CI/CD Status**: [Test and security check results]
+            **Code Quality**: [Based on Claude's analysis]
             
             ### 🔧 Recommendation
-            [Clear explanation of why this should/shouldn't merge]
+            [Clear explanation of why this should/shouldn't merge, referencing Claude's findings]
             
             ---
             *Decision made by Claude AI • PR #[Use PR_NUMBER env var]*
@@ -131,17 +176,43 @@ jobs:
       - name: Set merge decision status
         id: parse-decision
         run: |
-          # Since claude_response output might not be available, let's check the PR comments
-          # The Claude action should have posted its analysis as a comment
-          echo "::notice::Checking for merge decision in PR comments..."
+          echo "Parsing merge decision from Claude's response..."
           
-          # For now, let's assume the decision was posted as a comment
-          # We'll need to parse it from there or wait for the action to complete
-          echo "MERGE_DECISION=pending" >> $GITHUB_ENV
-          echo "::warning::Manual review of Claude's comment required to determine merge decision"
+          # Wait a moment for the comment to be posted
+          sleep 5
           
-          # Don't fail here - let the summary job handle the final decision
-          exit 0
+          # Fetch the latest comment from claude (merge decider)
+          gh pr view ${{ github.event.pull_request.number }} \
+            --json comments \
+            --jq '.comments[-1] | select(.author.login == "claude") | .body' \
+            > merge_decision_comment.txt || true
+          
+          if [ -s merge_decision_comment.txt ]; then
+            echo "Found merge decision comment"
+            cat merge_decision_comment.txt
+            
+            # Check for PASS decision
+            if grep -q "## 🤖 Merge Decision: PASS" merge_decision_comment.txt; then
+              echo "MERGE_DECISION=PASS" >> $GITHUB_ENV
+              echo "::notice::✅ Merge Decision: PASS - PR approved for merging"
+              exit 0
+            # Check for FAIL decision
+            elif grep -q "## 🤖 Merge Decision: FAIL" merge_decision_comment.txt; then
+              echo "MERGE_DECISION=FAIL" >> $GITHUB_ENV
+              echo "::error::❌ Merge Decision: FAIL - PR rejected"
+              exit 1
+            else
+              echo "::error::Unable to parse merge decision from Claude's comment"
+              echo "MERGE_DECISION=UNKNOWN" >> $GITHUB_ENV
+              exit 1
+            fi
+          else
+            echo "::error::No merge decision comment found from Claude"
+            echo "MERGE_DECISION=NOT_FOUND" >> $GITHUB_ENV
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   merge-decision-summary:
     runs-on: ubuntu-latest
@@ -154,25 +225,38 @@ jobs:
           
           case "$result" in
             "success")
-              echo "✅ Merge Decision: APPROVED"
-              echo "This PR has been approved by the merge decider and is ready to merge."
-              echo "::notice::AI merge decider has approved this PR."
+              echo "## ✅ Merge Decision: APPROVED"
+              echo ""
+              echo "The AI merge decider has approved this PR for merging."
+              echo "All checks have passed and Claude's review is positive."
+              echo ""
+              echo "::notice::✅ AI merge decider has APPROVED this PR"
+              exit 0
               ;;
             "failure")
-              echo "❌ Merge Decision: REJECTED or ERROR"
-              echo "The merge decision workflow encountered an issue."
-              echo "Please check the Claude Code comment on the PR for the actual decision."
-              echo "::warning::The merge decision could not be automatically determined. Manual review required."
-              # Don't exit with error - this might just be a parsing issue
+              echo "## ❌ Merge Decision: REJECTED"
+              echo ""
+              echo "The AI merge decider has rejected this PR."
+              echo "Please check Claude's review comment for specific issues to address."
+              echo ""
+              echo "::error::❌ AI merge decider has REJECTED this PR"
+              exit 1
               ;;
             "cancelled")
-              echo "⚠️ Merge Decision: CANCELLED"
+              echo "## ⚠️ Merge Decision: CANCELLED"
+              echo ""
               echo "The merge decision workflow was cancelled."
+              echo ""
+              echo "::warning::Merge decision workflow was cancelled"
               exit 1
               ;;
             *)
-              echo "❓ Merge Decision: UNKNOWN"
-              echo "Unexpected workflow result: $result"
+              echo "## ❓ Merge Decision: ERROR"
+              echo ""
+              echo "The merge decision workflow encountered an unexpected error."
+              echo "Result: $result"
+              echo ""
+              echo "::error::Merge decision workflow error - unexpected result: $result"
               exit 1
               ;;
           esac
