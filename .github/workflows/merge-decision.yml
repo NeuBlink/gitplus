@@ -1,7 +1,7 @@
 name: Merge Decision
 
 on:
-  # Run as a required status check on every PR
+  # Run as a required status check on every PR  
   pull_request:
     types: [opened, synchronize, reopened]
 
