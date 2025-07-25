@@ -952,8 +952,13 @@ jobs:
           echo "👤 Manual approval required - skipping auto-merge"
           echo "📝 Reason: $REASON"
           
-          # Create the comment body
-          COMMENT_BODY="👤 **Manual Approval Required**\\n\\n📋 **Reason**: $REASON\\n🔍 **Action**: Human review needed before merge\\n\\nGitPlus AI analysis determined this PR has good code quality but requires manual verification before merging."
+          # Create the comment body with proper line breaks
+          COMMENT_BODY="👤 **Manual Approval Required**
+
+📋 **Reason**: $REASON
+🔍 **Action**: Human review needed before merge
+
+GitPlus AI analysis determined this PR has good code quality but requires manual verification before merging."
           
           # Check for existing manual approval comment and update it (sticky behavior)
           EXISTING_COMMENT_ID=$(gh api repos/${{ github.repository }}/issues/$PR_NUMBER/comments \
