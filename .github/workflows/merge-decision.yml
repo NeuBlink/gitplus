@@ -1,13 +1,14 @@
 name: Merge Decision
 
 on:
+  # Trigger when key workflows complete
   workflow_run:
-    workflows: ["Claude Code Review"]
+    workflows: 
+      - "Claude Code Review"
+      - "CI"
+      - "PR Checks"
     types:
       - completed
-  # Also trigger on check_suite completion for comprehensive coverage
-  check_suite:
-    types: [completed]
 
 permissions:
   contents: read
@@ -20,88 +21,94 @@ permissions:
 jobs:
   merge-decision:
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    # Only run if the triggering workflow succeeded and has an associated PR
+    if: |
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.pull_requests[0] != null
     
     steps:
-      - name: Get PR number
-        id: pr-number
+      - name: Get PR number and check if all workflows completed
+        id: pr-check
         run: |
           # Get PR number from the workflow run
-          PR_NUMBER=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}" \
-            | jq -r '.pull_requests[0].number // empty')
+          PR_NUMBER=${{ github.event.workflow_run.pull_requests[0].number }}
           
           if [ -z "$PR_NUMBER" ]; then
-            echo "::error::Could not determine PR number from workflow run"
+            echo "::error::No PR associated with this workflow run"
             exit 1
           fi
           
           echo "PR_NUMBER=$PR_NUMBER" >> $GITHUB_OUTPUT
-          echo "Found PR #$PR_NUMBER"
-
-      # NO CHECKOUT - We don't need the code, just API access
-      # This avoids the security issue of checking out untrusted code
-
-      # Wait for other critical checks to complete
-      - name: Wait for required checks
-        id: wait-for-checks
-        run: |
-          echo "Waiting for required checks to complete for PR #${{ steps.pr-number.outputs.PR_NUMBER }}..."
+          echo "Found PR #$PR_NUMBER from workflow: ${{ github.event.workflow_run.name }}"
           
-          # Define checks to wait for (excluding claude-review since we already know it completed)
-          CHECKS=(
+          # Check if all required workflows have completed successfully
+          echo "Checking if all required workflows have completed..."
+          
+          # Get all check runs for this PR
+          gh pr checks $PR_NUMBER \
+            --repo ${{ github.repository }} \
+            --json name,conclusion,status > checks.json
+          
+          # Check if all critical checks are complete and successful
+          REQUIRED_CHECKS=(
+            "claude-review"
             "test (20.x)"
             "security"
             "validate-pr"
           )
           
-          # Wait for each check with timeout
-          for check in "${CHECKS[@]}"; do
-            echo "Waiting for $check..."
+          ALL_COMPLETE=true
+          ALL_SUCCESS=true
+          
+          for check in "${REQUIRED_CHECKS[@]}"; do
+            STATUS=$(cat checks.json | jq -r ".[] | select(.name == \"$check\") | .status // \"not_found\"")
+            CONCLUSION=$(cat checks.json | jq -r ".[] | select(.name == \"$check\") | .conclusion // \"not_found\"")
             
-            timeout=600  # 10 minutes max
-            interval=10  # Check every 10 seconds
-            elapsed=0
+            echo "Check $check: status=$STATUS, conclusion=$CONCLUSION"
             
-            while [ $elapsed -lt $timeout ]; do
-              # Get check status for the specific commit
-              state=$(gh pr checks ${{ steps.pr-number.outputs.PR_NUMBER }} \
-                --repo ${{ github.repository }} \
-                --json name,state,startedAt \
-                --jq ".[] | select(.name == \"$check\") | .state" || echo "pending")
-              
-              if [ "$state" = "completed" ] || [ "$state" = "success" ] || [ "$state" = "failure" ]; then
-                echo "$check completed with state: $state"
-                break
-              fi
-              
-              sleep $interval
-              elapsed=$((elapsed + interval))
-            done
+            if [ "$STATUS" != "completed" ]; then
+              ALL_COMPLETE=false
+              echo "Check $check is not complete yet"
+            fi
             
-            if [ $elapsed -ge $timeout ]; then
-              echo "::warning::Timeout waiting for $check"
+            if [ "$CONCLUSION" != "success" ] && [ "$CONCLUSION" != "not_found" ]; then
+              ALL_SUCCESS=false
+              echo "Check $check did not succeed"
             fi
           done
+          
+          if [ "$ALL_COMPLETE" != "true" ]; then
+            echo "Not all required checks are complete yet. Skipping merge decision."
+            echo "SHOULD_PROCEED=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          if [ "$ALL_SUCCESS" != "true" ]; then
+            echo "Some required checks failed. Will proceed to create failure decision."
+          fi
+          
+          echo "SHOULD_PROCEED=true" >> $GITHUB_OUTPUT
+          echo "ALL_CHECKS_PASSED=$ALL_SUCCESS" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Gather comprehensive PR context
       - name: Gather PR context
+        if: steps.pr-check.outputs.SHOULD_PROCEED == 'true'
         id: pr-context
         run: |
-          echo "Gathering comprehensive PR context for PR #${{ steps.pr-number.outputs.PR_NUMBER }}..."
+          echo "Gathering comprehensive PR context for PR #${{ steps.pr-check.outputs.PR_NUMBER }}..."
           
           # Get all check results
           echo "CHECK_RESULTS<<EOF" >> $GITHUB_OUTPUT
-          gh pr checks ${{ steps.pr-number.outputs.PR_NUMBER }} \
+          gh pr checks ${{ steps.pr-check.outputs.PR_NUMBER }} \
             --repo ${{ github.repository }} \
             --json name,state,conclusion \
             | jq -r '.[] | "\(.name): \(.state) (\(.conclusion // "pending"))"' >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           
           # Get PR metadata
-          PR_DATA=$(gh pr view ${{ steps.pr-number.outputs.PR_NUMBER }} \
+          PR_DATA=$(gh pr view ${{ steps.pr-check.outputs.PR_NUMBER }} \
             --repo ${{ github.repository }} \
             --json title,body,mergeable,mergeStateStatus,isDraft,author,baseRefName,headRefName,commits)
           
@@ -127,13 +134,9 @@ jobs:
           COMMIT_COUNT=$(echo "$PR_DATA" | jq -r '.commits.totalCount // 0')
           echo "PR_BEHIND_COUNT=0" >> $GITHUB_OUTPUT  # We can't calculate this without checkout
           
-          # Get Claude review comments from THIS workflow run
-          # First, get the time when the claude-review workflow started
-          WORKFLOW_START=$(date -u -d "${{ github.event.workflow_run.created_at }}" +%s)
-          
-          # Get all Claude comments and filter by timestamp
+          # Get Claude review comments from recent reviews
           echo "CLAUDE_REVIEWS<<EOF" >> $GITHUB_OUTPUT
-          gh pr view ${{ steps.pr-number.outputs.PR_NUMBER }} \
+          gh pr view ${{ steps.pr-check.outputs.PR_NUMBER }} \
             --repo ${{ github.repository }} \
             --json comments \
             --jq '.comments[] | select(.author.login == "claude") | .body' \
@@ -141,22 +144,27 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
           
           # Get specific check conclusions
-          TEST_RESULT=$(gh pr checks ${{ steps.pr-number.outputs.PR_NUMBER }} \
+          TEST_RESULT=$(gh pr checks ${{ steps.pr-check.outputs.PR_NUMBER }} \
             --repo ${{ github.repository }} \
             --json name,conclusion \
             | jq -r '.[] | select(.name == "test (20.x)") | .conclusion // "pending"')
-          SECURITY_RESULT=$(gh pr checks ${{ steps.pr-number.outputs.PR_NUMBER }} \
+          SECURITY_RESULT=$(gh pr checks ${{ steps.pr-check.outputs.PR_NUMBER }} \
             --repo ${{ github.repository }} \
             --json name,conclusion \
             | jq -r '.[] | select(.name == "security") | .conclusion // "pending"')
+          CLAUDE_RESULT=$(gh pr checks ${{ steps.pr-check.outputs.PR_NUMBER }} \
+            --repo ${{ github.repository }} \
+            --json name,conclusion \
+            | jq -r '.[] | select(.name == "claude-review") | .conclusion // "pending"')
           
           echo "TEST_CONCLUSION=$TEST_RESULT" >> $GITHUB_OUTPUT
           echo "SECURITY_CONCLUSION=$SECURITY_RESULT" >> $GITHUB_OUTPUT
-          echo "CLAUDE_REVIEW_CONCLUSION=success" >> $GITHUB_OUTPUT  # We know it succeeded since we're triggered by it
+          echo "CLAUDE_REVIEW_CONCLUSION=$CLAUDE_RESULT" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Merge Decision
+        if: steps.pr-check.outputs.SHOULD_PROCEED == 'true'
         id: merge-decision
         uses: anthropics/claude-code-action@e26577a930883943cf9d90885cd1e8da510078dd # beta
         with:
@@ -170,14 +178,14 @@ jobs:
             PR Title: ${{ steps.pr-context.outputs.PR_TITLE }}
             Target Branch: ${{ steps.pr-context.outputs.BASE_BRANCH }}
             Author: ${{ steps.pr-context.outputs.PR_AUTHOR }}
-            PR Number: #${{ steps.pr-number.outputs.PR_NUMBER }}
+            PR Number: #${{ steps.pr-check.outputs.PR_NUMBER }}
             Is Draft: ${{ steps.pr-context.outputs.PR_IS_DRAFT }}
             Is Release Please: ${{ steps.pr-context.outputs.IS_RELEASE_PLEASE }}
             Mergeable: ${{ steps.pr-context.outputs.PR_MERGEABLE }}
             Merge State: ${{ steps.pr-context.outputs.PR_MERGE_STATE }}
             Test Status: ${{ steps.pr-context.outputs.TEST_CONCLUSION }}
             Security Status: ${{ steps.pr-context.outputs.SECURITY_CONCLUSION }}
-            Claude Review Status: success (completed)
+            Claude Review Status: ${{ steps.pr-context.outputs.CLAUDE_REVIEW_CONCLUSION }}
             
             Claude's Review Comments:
             ${{ steps.pr-context.outputs.CLAUDE_REVIEWS }}
@@ -205,16 +213,17 @@ jobs:
         env:
           TARGET_BRANCH: ${{ steps.pr-context.outputs.BASE_BRANCH }}
           PR_AUTHOR: ${{ steps.pr-context.outputs.PR_AUTHOR }}
-          PR_NUMBER: ${{ steps.pr-number.outputs.PR_NUMBER }}
+          PR_NUMBER: ${{ steps.pr-check.outputs.PR_NUMBER }}
 
       - name: Parse merge decision
+        if: steps.pr-check.outputs.SHOULD_PROCEED == 'true'
         id: parse-decision
         run: |
           echo "Waiting for Claude's response to be posted..."
           sleep 10
           
           # Get the latest comment from Claude (merge decider)
-          CLAUDE_RESPONSE=$(gh pr view ${{ steps.pr-number.outputs.PR_NUMBER }} \
+          CLAUDE_RESPONSE=$(gh pr view ${{ steps.pr-check.outputs.PR_NUMBER }} \
             --repo ${{ github.repository }} \
             --json comments \
             --jq '.comments[-1] | select(.author.login == "claude") | .body' || echo "")
@@ -274,7 +283,7 @@ jobs:
               echo "::notice::🚀 Auto-merging Release Please PR"
               
               # Enable auto-merge for Release Please PR
-              gh pr merge ${{ steps.pr-number.outputs.PR_NUMBER }} \
+              gh pr merge ${{ steps.pr-check.outputs.PR_NUMBER }} \
                 --repo ${{ github.repository }} \
                 --auto \
                 --squash \
@@ -337,8 +346,12 @@ jobs:
             "skipped")
               echo "## ⏭️ Decision: SKIPPED"
               echo ""
-              echo "The merge decision was skipped because the Claude review failed."
-              echo "Please check the Claude review workflow for issues."
+              echo "The merge decision was skipped because:"
+              echo "- Not all required checks completed yet, OR"
+              echo "- The triggering workflow failed, OR"
+              echo "- No PR was associated with the workflow run"
+              echo ""
+              echo "The workflow will trigger again when another required check completes."
               ;;
             *)
               echo "## ❓ Decision: ERROR"
