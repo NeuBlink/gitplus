@@ -43,8 +43,12 @@ jobs:
             **IMPORTANT**: After completing your review, save your COMPLETE review output to a file:
             
             ```bash
+            # Create unique directory for this workflow run
+            RUN_DIR="/tmp/claude-review-${{ github.run_id }}-${{ github.run_attempt }}"
+            mkdir -p "$RUN_DIR"
+            
             # Save your entire review output to file (copy everything you just wrote above)
-            cat > /tmp/claude-review-analysis.md << 'EOF'
+            cat > "$RUN_DIR/claude-review-analysis.md" << 'EOF'
             [PASTE YOUR COMPLETE REVIEW OUTPUT HERE - INCLUDING ALL DETAILS, ANALYSIS, FINDINGS, RECOMMENDATIONS, EVERYTHING YOU WROTE ABOVE]
             EOF
             ```
@@ -58,8 +62,8 @@ jobs:
         if: always()  # Upload even if review has issues
         uses: actions/upload-artifact@v4
         with:
-          name: claude-review-analysis-${{ github.event.pull_request.number }}
-          path: /tmp/claude-review-analysis.md
+          name: claude-review-analysis-${{ github.event.pull_request.number }}-${{ github.run_id }}
+          path: /tmp/claude-review-${{ github.run_id }}-${{ github.run_attempt }}/claude-review-analysis.md
           retention-days: 7
           
           # Optional: Customize review based on file types
