@@ -249,30 +249,60 @@ jobs:
             }
             ```
 
-            **Important**: Only output the JSON object above. Do not include any other text, explanations, or markdown formatting outside the JSON.
+            **IMPORTANT**: After providing your analysis, also write your JSON decision to a file for the workflow to process:
+            
+            Create a file `/tmp/merge-decision.json` with your exact JSON decision using this command:
+            ```bash
+            echo '{"decision": "APPROVE", "reason": "Your reasoning here", "critical_issues": [], "recommended_action": "auto-merge"}' > /tmp/merge-decision.json
+            ```
+            
+            Replace the values with your actual decision. This ensures the workflow can reliably access your decision.
 
       - name: Parse merge decision
         id: parse-decision
         run: |
           echo "📋 Parsing Claude's merge decision..."
           
-          # Get the latest Claude comment which should contain the JSON decision
-          CLAUDE_DECISION_COMMENT=$(gh pr view ${{ steps.pr-context.outputs.PR_NUMBER }} \
-            --repo ${{ github.repository }} \
-            --json comments \
-            --jq '.comments[] | select(.author.login == "claude") | .body' \
-            | tail -n 1)
-          
-          # Extract JSON from the comment (it might be wrapped in markdown code blocks)
-          DECISION_JSON=$(echo "$CLAUDE_DECISION_COMMENT" | grep -o '{.*}' | head -1)
-          
-          if [ -z "$DECISION_JSON" ] || [ "$DECISION_JSON" = "null" ]; then
-            echo "❌ Failed to extract JSON decision from Claude's comment"
-            echo "Raw comment: $CLAUDE_DECISION_COMMENT"
-            exit 1
+          # First, try to read from the decision file that Claude should have created
+          DECISION_JSON=""
+          if [ -f "/tmp/merge-decision.json" ]; then
+            echo "✅ Found decision file, reading JSON..."
+            DECISION_JSON=$(cat /tmp/merge-decision.json)
+            echo "📄 Decision from file: $DECISION_JSON"
+          else
+            echo "⚠️ No decision file found, falling back to comment parsing..."
+            
+            # Fallback: Get Claude comment with better filtering
+            CLAUDE_DECISION_COMMENT=$(gh pr view ${{ steps.pr-context.outputs.PR_NUMBER }} \
+              --repo ${{ github.repository }} \
+              --json comments \
+              --jq '.comments[] | select(.author.login == "claude" and (.body | contains("\"decision\"") and (contains("APPROVE") or contains("REJECT")))) | .body' \
+              | head -1)
+            
+            if [ -z "$CLAUDE_DECISION_COMMENT" ] || [ "$CLAUDE_DECISION_COMMENT" = "null" ]; then
+              echo "❌ No decision comment found, trying latest Claude comment..."
+              CLAUDE_DECISION_COMMENT=$(gh pr view ${{ steps.pr-context.outputs.PR_NUMBER }} \
+                --repo ${{ github.repository }} \
+                --json comments \
+                --jq '.comments[] | select(.author.login == "claude") | .body' \
+                | tail -1)
+            fi
+            
+            # Extract JSON from the comment (handle markdown code blocks)
+            DECISION_JSON=$(echo "$CLAUDE_DECISION_COMMENT" | sed -n '/```json/,/```/p' | sed '1d;$d' | tr -d '\n' | head -1)
+            if [ -z "$DECISION_JSON" ]; then
+              # Fallback: try raw JSON extraction
+              DECISION_JSON=$(echo "$CLAUDE_DECISION_COMMENT" | grep -o '{[^}]*"decision"[^}]*}' | head -1)
+            fi
+            
+            if [ -z "$DECISION_JSON" ] || [ "$DECISION_JSON" = "null" ]; then
+              echo "❌ Failed to extract JSON decision from Claude's comment"
+              echo "Raw comment: $CLAUDE_DECISION_COMMENT"
+              exit 1
+            fi
+            
+            echo "📄 Decision from comment: $DECISION_JSON"
           fi
-          
-          echo "📄 Raw decision JSON: $DECISION_JSON"
           
           # Parse the decision
           DECISION=$(echo "$DECISION_JSON" | jq -r '.decision // "UNKNOWN"')
