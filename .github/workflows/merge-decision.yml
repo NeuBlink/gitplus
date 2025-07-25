@@ -184,44 +184,28 @@ jobs:
             echo "🤖 Release Please PR detected - skipping Claude review requirement"
             echo "CLAUDE_REVIEW_CONTENT=Release Please PR: Code review bypassed for automated release" >> $GITHUB_OUTPUT
             CLAUDE_RESULT="SKIPPED_RELEASE"
-          elif [ "$CLAUDE_RESULT" = "SUCCESS" ]; then
-            echo "🔍 Loading Claude review from artifact file..."
+          elif [ "$CLAUDE_RESULT" = "SUCCESS" ] && [ "${{ steps.validate-review.outputs.review_valid }}" = "true" ]; then
+            echo "🔍 Loading validated Claude review from artifact file..."
             
-            # Check if download step found the analysis file
-            if [ "${{ steps.download-review.outputs.analysis_available }}" = "true" ]; then
-              ANALYSIS_FILE="${{ steps.download-review.outputs.analysis_path }}"
-              echo "✅ Found Claude review analysis file at: $ANALYSIS_FILE"
-              CLAUDE_REVIEW_CONTENT=$(cat "$ANALYSIS_FILE")
-              FILE_SIZE=$(wc -c < "$ANALYSIS_FILE")
-              echo "📄 Review file size: $FILE_SIZE characters"
-              echo "📝 Review preview: ${CLAUDE_REVIEW_CONTENT:0:200}..."
-              
-              echo "CLAUDE_REVIEW_CONTENT<<EOF" >> $GITHUB_OUTPUT
-              echo "$CLAUDE_REVIEW_CONTENT" >> $GITHUB_OUTPUT
-              echo "EOF" >> $GITHUB_OUTPUT
-            else
-              echo "⚠️ Claude review file not found, falling back to comment parsing..."
-              
-              # Fallback: Get the most substantial Claude comment
-              CLAUDE_REVIEW_COMMENT=$(gh pr view $PR_NUMBER \
-                --repo ${{ github.repository }} \
-                --json comments \
-                --jq '.comments[] | select(.author.login == "claude" and (.body | length > 100)) | .body' \
-                | tail -n 1)
-              
-              if [ -n "$CLAUDE_REVIEW_COMMENT" ] && [ "$CLAUDE_REVIEW_COMMENT" != "null" ]; then
-                echo "✅ Found Claude review comment as fallback (${#CLAUDE_REVIEW_COMMENT} characters)"
-                echo "CLAUDE_REVIEW_CONTENT<<EOF" >> $GITHUB_OUTPUT
-                echo "$CLAUDE_REVIEW_COMMENT" >> $GITHUB_OUTPUT
-                echo "EOF" >> $GITHUB_OUTPUT
-              else
-                echo "❌ No Claude review content available"
-                echo "CLAUDE_REVIEW_CONTENT=⚠️ Claude review content not provided in context. This may be due to: 1) Claude review workflow still running, 2) Missing artifact file, 3) No substantial Claude comments found. This is common for simple PRs and does not indicate code quality issues." >> $GITHUB_OUTPUT
-              fi
-            fi
+            ANALYSIS_FILE="${{ steps.download-review.outputs.analysis_path }}"
+            echo "✅ Using validated Claude review analysis file at: $ANALYSIS_FILE"
+            CLAUDE_REVIEW_CONTENT=$(cat "$ANALYSIS_FILE")
+            FILE_SIZE=$(wc -c < "$ANALYSIS_FILE")
+            echo "📄 Review file size: $FILE_SIZE characters"
+            echo "📝 Review preview: ${CLAUDE_REVIEW_CONTENT:0:200}..."
+            
+            echo "CLAUDE_REVIEW_CONTENT<<EOF" >> $GITHUB_OUTPUT
+            echo "$CLAUDE_REVIEW_CONTENT" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
           else
-            echo "⚠️ Claude review not successful, no review content available"
-            echo "CLAUDE_REVIEW_CONTENT=Claude review check did not complete successfully (status: $CLAUDE_RESULT)" >> $GITHUB_OUTPUT
+            echo "❌ ERROR: Claude review required but not available or invalid"
+            echo "Claude Code Review is mandatory for all non-Release-Please PRs"
+            echo "Review status: $CLAUDE_RESULT"
+            echo "Validation status: ${{ steps.validate-review.outputs.review_valid }}"
+            
+            # Fail the workflow - no fallbacks
+            echo "CLAUDE_REVIEW_CONTENT=ERROR: Claude review validation failed. This PR cannot proceed without a valid code review." >> $GITHUB_OUTPUT
+            exit 1
           fi
           
           # Count passed/failed checks (exclude SKIPPED and null checks from total)
@@ -389,6 +373,56 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true
+
+      - name: Validate Claude review content
+        id: validate-review
+        if: steps.pr-context.outputs.IS_RELEASE_PLEASE != 'true'
+        run: |
+          echo "🔍 Validating Claude review content..."
+          
+          if [ "${{ steps.download-review.outputs.analysis_available }}" != "true" ]; then
+            echo "❌ ERROR: Claude review artifact not available"
+            echo "Claude Code Review is required for all non-Release-Please PRs"
+            exit 1
+          fi
+          
+          ANALYSIS_FILE="${{ steps.download-review.outputs.analysis_path }}"
+          if [ ! -f "$ANALYSIS_FILE" ]; then
+            echo "❌ ERROR: Claude review file not found at expected path"
+            exit 1
+          fi
+          
+          # Check file size
+          FILE_SIZE=$(wc -c < "$ANALYSIS_FILE")
+          echo "📄 Claude review file size: $FILE_SIZE bytes"
+          
+          if [ $FILE_SIZE -lt 1000 ]; then
+            echo "❌ ERROR: Claude review file too small ($FILE_SIZE bytes)"
+            echo "Minimum 1KB required for a valid review"
+            echo "File contents:"
+            cat "$ANALYSIS_FILE"
+            exit 1
+          fi
+          
+          # Check for required structure
+          if ! grep -q -E "(Code Review|## |Analysis|Summary)" "$ANALYSIS_FILE"; then
+            echo "❌ ERROR: Claude review missing required structure"
+            echo "Review must contain sections like 'Code Review Summary'"
+            echo "File preview:"
+            head -20 "$ANALYSIS_FILE"
+            exit 1
+          fi
+          
+          # Check for error markers
+          if grep -q "ERROR\|Failed to capture Claude review" "$ANALYSIS_FILE"; then
+            echo "❌ ERROR: Claude review contains error markers"
+            echo "This indicates the review was not properly captured"
+            cat "$ANALYSIS_FILE"
+            exit 1
+          fi
+          
+          echo "✅ Claude review validation passed"
+          echo "review_valid=true" >> $GITHUB_OUTPUT
 
       - name: Prepare decision environment
         run: |

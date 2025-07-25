@@ -89,15 +89,42 @@ jobs:
           # Get the Claude review comment from the PR
           PR_NUMBER=${{ github.event.pull_request.number }}
           
-          # Wait a moment for comment to be posted
-          sleep 10
+          echo "🔍 Waiting for Claude's comprehensive review to be posted..."
           
-          # Get Claude's most recent substantial comment on this PR
-          CLAUDE_REVIEW_CONTENT=$(gh pr view $PR_NUMBER \
-            --repo ${{ github.repository }} \
-            --json comments \
-            --jq '.comments[] | select(.author.login == "claude" and (.body | length > 100)) | .body' \
-            | tail -1)
+          # Wait longer and poll multiple times for comprehensive review content
+          MAX_ATTEMPTS=12  # 2 minutes total (12 * 10 seconds)
+          ATTEMPT=1
+          CLAUDE_REVIEW_CONTENT=""
+          
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            echo "📋 Attempt $ATTEMPT/$MAX_ATTEMPTS: Looking for Claude review content..."
+            
+            # Look for Claude comments with comprehensive content (contains key review markers)
+            POTENTIAL_REVIEW=$(gh pr view $PR_NUMBER \
+              --repo ${{ github.repository }} \
+              --json comments \
+              --jq '.comments[] | select(.author.login == "claude" and (.body | contains("Code Review") or contains("Analysis") or contains("## ") or contains("**") or length > 200)) | .body' \
+              | tail -1)
+            
+            if [ -n "$POTENTIAL_REVIEW" ] && [ "$POTENTIAL_REVIEW" != "null" ]; then
+              # Check if this looks like a comprehensive review (not just a checkbox)
+              if echo "$POTENTIAL_REVIEW" | grep -q -E "(Code Review|Analysis|Security|Quality|Performance|## |Review Summary|Key Findings)"; then
+                CLAUDE_REVIEW_CONTENT="$POTENTIAL_REVIEW"
+                echo "✅ Found comprehensive Claude review content (${#CLAUDE_REVIEW_CONTENT} characters)"
+                break
+              else
+                echo "⚠️ Found Claude comment (${#POTENTIAL_REVIEW} chars) but appears to be initial response, waiting for full review..."
+              fi
+            else
+              echo "📋 No substantial Claude comment found yet..."
+            fi
+            
+            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+              echo "⏳ Waiting 10 seconds before next attempt..."
+              sleep 10
+            fi
+            ATTEMPT=$((ATTEMPT + 1))
+          done
           
           if [ -n "$CLAUDE_REVIEW_CONTENT" ] && [ "$CLAUDE_REVIEW_CONTENT" != "null" ]; then
             echo "✅ Successfully captured Claude review content (${#CLAUDE_REVIEW_CONTENT} characters)"
@@ -109,22 +136,42 @@ jobs:
             if [ -f "$RUN_DIR/claude-review-analysis.md" ]; then
               FILE_SIZE=$(wc -c < "$RUN_DIR/claude-review-analysis.md")
               echo "📄 Review analysis file created: $FILE_SIZE bytes"
-              echo "📝 File preview:"
-              head -5 "$RUN_DIR/claude-review-analysis.md"
+              echo "📝 File preview (first 300 chars):"
+              head -c 300 "$RUN_DIR/claude-review-analysis.md"
+              echo ""
             else
               echo "❌ Failed to create review analysis file"
+              exit 1
+            fi
+            
+            # Validate content structure
+            if [ $FILE_SIZE -lt 1000 ]; then
+              echo "❌ ERROR: Claude review is too short (${FILE_SIZE} bytes). Minimum 1KB required."
+              echo "This indicates the review was not properly captured."
+              exit 1
+            fi
+            
+            if ! grep -q -E "(Code Review|## |Analysis|Summary)" "$RUN_DIR/claude-review-analysis.md"; then
+              echo "❌ ERROR: Claude review missing required structure markers"
+              echo "Review must contain proper sections like 'Code Review Summary'"
+              exit 1
             fi
           else
-            echo "⚠️ No substantial Claude review comment found, creating placeholder"
-            echo "# Claude Code Review - No Content Captured" > "$RUN_DIR/claude-review-analysis.md"
+            echo "❌ ERROR: No Claude review found after ${MAX_ATTEMPTS} attempts"
+            echo "Claude Code Review is required but was not captured."
+            echo "This workflow will fail to ensure proper review process."
+            
+            # Create error file for debugging
+            echo "# Claude Code Review - ERROR" > "$RUN_DIR/claude-review-analysis.md"
             echo "" >> "$RUN_DIR/claude-review-analysis.md"
-            echo "⚠️ Claude review content was not successfully captured from the PR comments." >> "$RUN_DIR/claude-review-analysis.md"
-            echo "This could be due to:" >> "$RUN_DIR/claude-review-analysis.md"
-            echo "- Review still in progress" >> "$RUN_DIR/claude-review-analysis.md"
-            echo "- Comment not yet posted" >> "$RUN_DIR/claude-review-analysis.md"
-            echo "- API timing issues" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "❌ Failed to capture Claude review after waiting 2 minutes." >> "$RUN_DIR/claude-review-analysis.md"
             echo "" >> "$RUN_DIR/claude-review-analysis.md"
-            echo "The merge decision workflow should use fallback methods to access the review content." >> "$RUN_DIR/claude-review-analysis.md"
+            echo "Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "Workflow Run: ${{ github.run_id }}" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "PR Number: $PR_NUMBER" >> "$RUN_DIR/claude-review-analysis.md"
+            
+            # Fail the step
+            exit 1
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
