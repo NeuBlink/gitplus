@@ -1,8 +1,10 @@
 name: Merge Decision
 
 on:
-  pull_request:
-    types: [opened, synchronize]
+  workflow_run:
+    workflows: ["Claude Code Review"]
+    types:
+      - completed
 
 permissions:
   contents: read
@@ -15,22 +17,39 @@ permissions:
 jobs:
   merge-decision:
     runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     
     steps:
+      - name: Get PR number
+        id: pr-number
+        run: |
+          # Get PR number from the workflow run
+          PR_NUMBER=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}" \
+            | jq -r '.pull_requests[0].number // empty')
+          
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::error::Could not determine PR number from workflow run"
+            exit 1
+          fi
+          
+          echo "PR_NUMBER=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "Found PR #$PR_NUMBER"
+
       - name: Checkout repository
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
         with:
-          fetch-depth: 0  # Need full history to check if behind base branch
+          ref: ${{ github.event.workflow_run.head_branch }}
+          fetch-depth: 0
 
-      # Wait for all critical checks to complete
-      - name: Wait for all required checks
+      # Wait for other critical checks to complete
+      - name: Wait for required checks
         id: wait-for-checks
         run: |
-          echo "Waiting for all required checks to complete..."
+          echo "Waiting for required checks to complete for PR #${{ steps.pr-number.outputs.PR_NUMBER }}..."
           
-          # Define checks to wait for
+          # Define checks to wait for (excluding claude-review since we already know it completed)
           CHECKS=(
-            "claude-review"
             "test (20.x)"
             "security"
             "validate-pr"
@@ -40,16 +59,17 @@ jobs:
           for check in "${CHECKS[@]}"; do
             echo "Waiting for $check..."
             
-            # Use gh CLI to wait for check
-            timeout=1200  # 20 minutes max
-            interval=15   # Check every 15 seconds
+            timeout=600  # 10 minutes max
+            interval=10  # Check every 10 seconds
             elapsed=0
             
             while [ $elapsed -lt $timeout ]; do
-              state=$(gh pr checks ${{ github.event.pull_request.number }} --json name,state \
-                | jq -r ".[] | select(.name == \"$check\") | .state" || echo "pending")
+              # Get check status for the specific commit
+              state=$(gh pr checks ${{ steps.pr-number.outputs.PR_NUMBER }} \
+                --json name,state,startedAt \
+                --jq ".[] | select(.name == \"$check\") | .state" || echo "pending")
               
-              if [ "$state" != "pending" ] && [ "$state" != "queued" ] && [ "$state" != "" ]; then
+              if [ "$state" = "completed" ] || [ "$state" = "success" ] || [ "$state" = "failure" ]; then
                 echo "$check completed with state: $state"
                 break
               fi
@@ -69,49 +89,54 @@ jobs:
       - name: Gather PR context
         id: pr-context
         run: |
-          echo "Gathering comprehensive PR context..."
+          echo "Gathering comprehensive PR context for PR #${{ steps.pr-number.outputs.PR_NUMBER }}..."
           
           # Get all check results
           echo "CHECK_RESULTS<<EOF" >> $GITHUB_OUTPUT
-          gh pr checks ${{ github.event.pull_request.number }} --json name,state,conclusion \
+          gh pr checks ${{ steps.pr-number.outputs.PR_NUMBER }} --json name,state,conclusion \
             | jq -r '.[] | "\(.name): \(.state) (\(.conclusion // "pending"))"' >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           
           # Get PR metadata
-          PR_DATA=$(gh pr view ${{ github.event.pull_request.number }} \
+          PR_DATA=$(gh pr view ${{ steps.pr-number.outputs.PR_NUMBER }} \
             --json title,body,mergeable,mergeStateStatus,isDraft,author,baseRefName,headRefName)
           
           echo "PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')" >> $GITHUB_OUTPUT
           echo "PR_MERGEABLE=$(echo "$PR_DATA" | jq -r '.mergeable')" >> $GITHUB_OUTPUT
           echo "PR_MERGE_STATE=$(echo "$PR_DATA" | jq -r '.mergeStateStatus')" >> $GITHUB_OUTPUT
           echo "PR_IS_DRAFT=$(echo "$PR_DATA" | jq -r '.isDraft')" >> $GITHUB_OUTPUT
+          echo "PR_AUTHOR=$(echo "$PR_DATA" | jq -r '.author.login')" >> $GITHUB_OUTPUT
+          echo "BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')" >> $GITHUB_OUTPUT
           
           # Check if PR is behind base branch
           BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')
           HEAD_BRANCH=$(echo "$PR_DATA" | jq -r '.headRefName')
           
           git fetch origin $BASE_BRANCH
-          BEHIND_COUNT=$(git rev-list --count HEAD..origin/$BASE_BRANCH)
+          BEHIND_COUNT=$(git rev-list --count HEAD..origin/$BASE_BRANCH || echo "0")
           echo "PR_BEHIND_COUNT=$BEHIND_COUNT" >> $GITHUB_OUTPUT
           
-          # Get all Claude review comments
+          # Get Claude review comments from THIS workflow run
+          # First, get the time when the claude-review workflow started
+          WORKFLOW_START=$(date -u -d "${{ github.event.workflow_run.created_at }}" +%s)
+          
+          # Get all Claude comments and filter by timestamp
           echo "CLAUDE_REVIEWS<<EOF" >> $GITHUB_OUTPUT
-          gh pr view ${{ github.event.pull_request.number }} \
+          gh pr view ${{ steps.pr-number.outputs.PR_NUMBER }} \
             --json comments \
-            --jq '.comments[] | select(.author.login == "claude") | .body' >> $GITHUB_OUTPUT
+            --jq '.comments[] | select(.author.login == "claude") | 
+              select(.createdAt | fromdateiso8601 >= '$WORKFLOW_START') | .body' >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           
           # Get specific check conclusions
-          TEST_RESULT=$(gh pr checks ${{ github.event.pull_request.number }} --json name,conclusion \
+          TEST_RESULT=$(gh pr checks ${{ steps.pr-number.outputs.PR_NUMBER }} --json name,conclusion \
             | jq -r '.[] | select(.name == "test (20.x)") | .conclusion // "pending"')
-          SECURITY_RESULT=$(gh pr checks ${{ github.event.pull_request.number }} --json name,conclusion \
+          SECURITY_RESULT=$(gh pr checks ${{ steps.pr-number.outputs.PR_NUMBER }} --json name,conclusion \
             | jq -r '.[] | select(.name == "security") | .conclusion // "pending"')
-          CLAUDE_RESULT=$(gh pr checks ${{ github.event.pull_request.number }} --json name,conclusion \
-            | jq -r '.[] | select(.name == "claude-review") | .conclusion // "pending"')
           
           echo "TEST_CONCLUSION=$TEST_RESULT" >> $GITHUB_OUTPUT
           echo "SECURITY_CONCLUSION=$SECURITY_RESULT" >> $GITHUB_OUTPUT
-          echo "CLAUDE_REVIEW_CONCLUSION=$CLAUDE_RESULT" >> $GITHUB_OUTPUT
+          echo "CLAUDE_REVIEW_CONCLUSION=success" >> $GITHUB_OUTPUT  # We know it succeeded since we're triggered by it
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -127,16 +152,16 @@ jobs:
             
             Context:
             PR Title: ${{ steps.pr-context.outputs.PR_TITLE }}
-            Target Branch: ${{ github.event.pull_request.base.ref }}
-            Author: ${{ github.event.pull_request.user.login }}
-            PR Number: #${{ github.event.pull_request.number }}
+            Target Branch: ${{ steps.pr-context.outputs.BASE_BRANCH }}
+            Author: ${{ steps.pr-context.outputs.PR_AUTHOR }}
+            PR Number: #${{ steps.pr-number.outputs.PR_NUMBER }}
             Is Draft: ${{ steps.pr-context.outputs.PR_IS_DRAFT }}
             Mergeable: ${{ steps.pr-context.outputs.PR_MERGEABLE }}
             Merge State: ${{ steps.pr-context.outputs.PR_MERGE_STATE }}
             Behind Base Branch: ${{ steps.pr-context.outputs.PR_BEHIND_COUNT }} commits
             Test Status: ${{ steps.pr-context.outputs.TEST_CONCLUSION }}
             Security Status: ${{ steps.pr-context.outputs.SECURITY_CONCLUSION }}
-            Claude Review Status: ${{ steps.pr-context.outputs.CLAUDE_REVIEW_CONCLUSION }}
+            Claude Review Status: success (completed)
             
             Claude's Review Comments:
             ${{ steps.pr-context.outputs.CLAUDE_REVIEWS }}
@@ -160,9 +185,9 @@ jobs:
             
             OUTPUT ONLY THE JSON OBJECT. NOTHING ELSE.
         env:
-          TARGET_BRANCH: ${{ github.event.pull_request.base.ref }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          TARGET_BRANCH: ${{ steps.pr-context.outputs.BASE_BRANCH }}
+          PR_AUTHOR: ${{ steps.pr-context.outputs.PR_AUTHOR }}
+          PR_NUMBER: ${{ steps.pr-number.outputs.PR_NUMBER }}
 
       - name: Parse merge decision
         id: parse-decision
@@ -171,7 +196,7 @@ jobs:
           sleep 10
           
           # Get the latest comment from Claude (merge decider)
-          CLAUDE_RESPONSE=$(gh pr view ${{ github.event.pull_request.number }} \
+          CLAUDE_RESPONSE=$(gh pr view ${{ steps.pr-number.outputs.PR_NUMBER }} \
             --json comments \
             --jq '.comments[-1] | select(.author.login == "claude") | .body' || echo "")
           
@@ -276,6 +301,12 @@ jobs:
               echo ""
               echo "The merge decision workflow was cancelled."
               echo "This may happen if the PR was closed or the workflow was manually stopped."
+              ;;
+            "skipped")
+              echo "## ⏭️ Decision: SKIPPED"
+              echo ""
+              echo "The merge decision was skipped because the Claude review failed."
+              echo "Please check the Claude review workflow for issues."
               ;;
             *)
               echo "## ❓ Decision: ERROR"
