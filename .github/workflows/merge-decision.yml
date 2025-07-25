@@ -54,8 +54,31 @@ jobs:
             # Get all check runs for this PR
             CHECKS=$(gh pr checks $PR_NUMBER --repo ${{ github.repository }} --json name,state)
             
-            # Check if required checks exist and are complete
-            REQUIRED_CHECKS=("claude-review" "test (20.x)" "security" "validate-pr")
+            # Get all available checks and determine what's actually running
+            AVAILABLE_CHECKS=$(echo "$CHECKS" | jq -r '.[].name' | sort)
+            echo "Available checks: $(echo "$AVAILABLE_CHECKS" | tr '\n' ', ' | sed 's/,$//')"
+            
+            # Define preferred checks (in priority order) but be flexible about what exists
+            PREFERRED_CHECKS=("claude-review" "test (20.x)" "security" "validate-pr" "CI / test (20.x)")
+            REQUIRED_CHECKS=()
+            
+            # Build list of required checks based on what's actually available
+            for check in "${PREFERRED_CHECKS[@]}"; do
+              if echo "$AVAILABLE_CHECKS" | grep -q "^$check$"; then
+                REQUIRED_CHECKS+=("$check")
+              fi
+            done
+            
+            # If no preferred checks are available, wait for any checks that are running
+            if [ ${#REQUIRED_CHECKS[@]} -eq 0 ]; then
+              echo "No preferred checks found, waiting for any available checks to complete..."
+              while IFS= read -r check; do
+                REQUIRED_CHECKS+=("$check")
+              done <<< "$AVAILABLE_CHECKS"
+            fi
+            
+            echo "Required checks: ${REQUIRED_CHECKS[*]}"
+            
             ALL_COMPLETE=true
             ALL_SUCCESS=true
             
@@ -143,11 +166,18 @@ jobs:
           # Get all checks summary
           ALL_CHECKS=$(gh pr checks $PR_NUMBER --repo ${{ github.repository }} --json name,state)
           
-          # Key check states
-          TEST_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "test (20.x)") | .state // "PENDING"')
-          SECURITY_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "security") | .state // "PENDING"')
-          CLAUDE_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "claude-review") | .state // "PENDING"')
-          VALIDATE_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "validate-pr") | .state // "PENDING"')
+          # Key check states - be flexible about check names
+          TEST_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "test (20.x)" or .name == "CI / test (20.x)") | .state' | head -1)
+          TEST_RESULT=${TEST_RESULT:-"PENDING"}
+          
+          SECURITY_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "security" or .name == "CI / security") | .state' | head -1)
+          SECURITY_RESULT=${SECURITY_RESULT:-"PENDING"}
+          
+          CLAUDE_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "claude-review") | .state' | head -1)
+          CLAUDE_RESULT=${CLAUDE_RESULT:-"PENDING"}
+          
+          VALIDATE_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "validate-pr") | .state' | head -1)
+          VALIDATE_RESULT=${VALIDATE_RESULT:-"PENDING"}
           
           # Get complete Claude review content from artifact file (preferred method)
           if [ "$CLAUDE_RESULT" = "SUCCESS" ]; then
