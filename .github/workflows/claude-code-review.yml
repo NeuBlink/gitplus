@@ -99,12 +99,12 @@ jobs:
           while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
             echo "📋 Attempt $ATTEMPT/$MAX_ATTEMPTS: Looking for Claude review content..."
             
-            # Look for Claude comments with comprehensive content (contains key review markers)
+            # Look for Claude comments with comprehensive content
+            # Get the Claude comment body directly (should be only one)
             POTENTIAL_REVIEW=$(gh pr view $PR_NUMBER \
               --repo ${{ github.repository }} \
-              --json comments \
-              --jq '.comments[] | select(.author.login == "claude" and (.body | contains("Code Review") or contains("Analysis") or contains("## ") or contains("**") or length > 200)) | .body' \
-              | tail -1)
+              --json comments | \
+              jq -r '.comments[] | select(.author.login == "claude" and (.body | length > 200)) | .body')
             
             if [ -n "$POTENTIAL_REVIEW" ] && [ "$POTENTIAL_REVIEW" != "null" ]; then
               # Check if this looks like a comprehensive review (not just a checkbox)
