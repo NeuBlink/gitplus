@@ -92,7 +92,9 @@ jobs:
           echo "🔍 Waiting for Claude's comprehensive review to be posted..."
           
           # Wait longer and poll multiple times for comprehensive review content
-          MAX_ATTEMPTS=12  # 2 minutes total (12 * 10 seconds)
+          MAX_ATTEMPTS=${MAX_ATTEMPTS:-12}  # 2 minutes total (12 * 10 seconds), configurable via env
+          POLL_INTERVAL=${POLL_INTERVAL:-10}  # seconds between attempts, configurable via env
+          MIN_REVIEW_LENGTH=${MIN_REVIEW_LENGTH:-100}  # minimum characters for valid review
           ATTEMPT=1
           CLAUDE_REVIEW_CONTENT=""
           
@@ -105,11 +107,11 @@ jobs:
             POTENTIAL_REVIEW=$(gh pr view $PR_NUMBER \
               --repo ${{ github.repository }} \
               --json comments | \
-              jq -r '.comments[] | select(.author.login == "claude" and (.body | length > 200)) | .body')
+              jq -r ".comments[] | select(.author.login == \"claude\" and (.body | length > $MIN_REVIEW_LENGTH)) | .body")
             
             if [ -n "$POTENTIAL_REVIEW" ] && [ "$POTENTIAL_REVIEW" != "null" ]; then
-              # Check if this looks like a comprehensive review (not just a checkbox)
-              if echo "$POTENTIAL_REVIEW" | grep -q -E "(Code Review|Analysis|Security|Quality|Performance|## |Review Summary|Key Findings)"; then
+              # Check if this looks like a comprehensive review with flexible pattern matching
+              if echo "$POTENTIAL_REVIEW" | grep -q -E "(##|Code Review|Analysis|Summary|Findings|Assessment|Recommendation|Security|Quality|Performance|Overall|Final)"; then
                 CLAUDE_REVIEW_CONTENT="$POTENTIAL_REVIEW"
                 echo "✅ Found comprehensive Claude review content (${#CLAUDE_REVIEW_CONTENT} characters)"
                 break
@@ -121,8 +123,8 @@ jobs:
             fi
             
             if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
-              echo "⏳ Waiting 10 seconds before next attempt..."
-              sleep 10
+              echo "⏳ Waiting $POLL_INTERVAL seconds before next attempt..."
+              sleep $POLL_INTERVAL
             fi
             ATTEMPT=$((ATTEMPT + 1))
           done
@@ -146,15 +148,16 @@ jobs:
             fi
             
             # Validate content structure
-            if [ $FILE_SIZE -lt 1000 ]; then
-              echo "❌ ERROR: Claude review is too short (${FILE_SIZE} bytes). Minimum 1KB required."
+            MIN_FILE_SIZE=${MIN_FILE_SIZE:-1000}  # minimum file size in bytes
+            if [ $FILE_SIZE -lt $MIN_FILE_SIZE ]; then
+              echo "❌ ERROR: Claude review is too short (${FILE_SIZE} bytes). Minimum ${MIN_FILE_SIZE} bytes required."
               echo "This indicates the review was not properly captured."
               exit 1
             fi
             
-            if ! grep -q -E "(Code Review|## |Analysis|Summary)" "$RUN_DIR/claude-review-analysis.md"; then
+            if ! grep -q -E "(##|Code Review|Analysis|Summary|Findings|Assessment|Recommendation|Security|Quality|Performance|Overall|Final)" "$RUN_DIR/claude-review-analysis.md"; then
               echo "❌ ERROR: Claude review missing required structure markers"
-              echo "Review must contain proper sections like 'Code Review Summary'"
+              echo "Review must contain structured sections (e.g., 'Code Review Summary', '## Analysis', etc.)"
               exit 1
             fi
           else
