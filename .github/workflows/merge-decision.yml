@@ -406,11 +406,13 @@ jobs:
           
           # Get list of artifacts and find the most recent Claude review with run info
           ALL_ARTIFACTS=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts")
-          ARTIFACT_INFO=$(echo "$ALL_ARTIFACTS" | jq --arg pr_prefix "claude-review-analysis-$PR_NUMBER-" '.artifacts[] | select(.name | startswith($pr_prefix)) | {name: .name, id: .id, workflow_run: .workflow_run.id} | [.workflow_run, .name, .id] | @csv' | head -1 | tr -d '"')
+          ARTIFACT_DATA=$(echo "$ALL_ARTIFACTS" | jq --arg pr_prefix "claude-review-analysis-$PR_NUMBER-" '.artifacts[] | select(.name | startswith($pr_prefix)) | {name: .name, id: .id, workflow_run: .workflow_run.id}' | head -1)
           
-          if [ -n "$ARTIFACT_INFO" ]; then
-            # Parse the CSV: workflow_run_id,artifact_name,artifact_id
-            IFS=',' read -r WORKFLOW_RUN_ID ARTIFACT_NAME ARTIFACT_ID <<< "$ARTIFACT_INFO"
+          if [ -n "$ARTIFACT_DATA" ] && [ "$ARTIFACT_DATA" != "null" ]; then
+            # Extract individual fields without CSV parsing
+            WORKFLOW_RUN_ID=$(echo "$ARTIFACT_DATA" | jq -r '.workflow_run')
+            ARTIFACT_NAME=$(echo "$ARTIFACT_DATA" | jq -r '.name')
+            ARTIFACT_ID=$(echo "$ARTIFACT_DATA" | jq -r '.id')
             echo "Found artifact: $ARTIFACT_NAME (ID: $ARTIFACT_ID, Run: $WORKFLOW_RUN_ID)"
             
             # Download using the run ID for better reliability
