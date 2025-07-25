@@ -33,46 +33,58 @@ jobs:
           
           # Direct prompt for automated review (no @claude mention needed)
           direct_prompt: |
-            Please review this pull request and provide comprehensive feedback on:
-            - Code quality and best practices
-            - Potential bugs or issues
-            - Performance considerations
-            - Security concerns
-            - Test coverage
-            - Architecture and design
-            - Documentation quality
+            **IMPORTANT: You must provide a comprehensive, structured code review that will be captured by our workflow system.**
             
-            **Please structure your review as follows:**
+            Please review this pull request and provide detailed feedback. Your response will be saved as an artifact for the merge decision process, so please be thorough and complete.
             
-            ## Code Review Summary
+            **Required Review Structure - Use this exact format:**
             
-            **Overall Assessment:** [Your overall assessment - Approve, Request Changes, or Comment]
+            # Code Review Summary
+            
+            **Overall Assessment:** [Approve/Request Changes/Comment]
             
             **Key Findings:**
-            - [List your main findings here]
+            - [List your main findings here - be specific]
+            - [Include any issues or concerns]
+            - [Note positive aspects as well]
             
-            **Security Concerns:** [Any security issues you identify]
+            **Security Concerns:** [Any security issues - write "None identified" if none]
             
             **Code Quality:** [Assessment of code quality, patterns, best practices]
             
             **Testing:** [Assessment of test coverage and quality]
             
-            **Performance:** [Any performance considerations]
-            
-            **Recommendations:**
-            - [Your specific recommendations]
+            **Performance:** [Any performance considerations - write "No concerns" if none]
             
             ## Detailed Analysis
             
-            [Provide your detailed analysis here - be thorough and specific]
+            **Files Changed:**
+            [Analyze each changed file and provide specific feedback]
+            
+            **Code Patterns:**
+            [Comment on coding patterns, style, maintainability]
+            
+            **Potential Issues:**
+            [List any bugs, edge cases, or concerns you identify]
+            
+            **Best Practices:**
+            [Comment on adherence to best practices]
+            
+            ## Recommendations
+            
+            - [Provide specific, actionable recommendations]
+            - [Include both required changes and suggestions for improvement]
+            - [If no changes needed, state "No changes required"]
             
             ## Final Recommendation
             
-            [Your final recommendation: APPROVE, REQUEST_CHANGES, or COMMENT with clear reasoning]
+            **Decision:** [APPROVE/REQUEST_CHANGES/COMMENT]
+            **Reasoning:** [Clear explanation of your decision]
+            **Merge Safety:** [Is this safe to merge? Any blockers?]
             
             ---
             
-            Be constructive and helpful in your feedback. Provide specific, actionable suggestions for improvement.
+            **CRITICAL**: Ensure your response includes all the sections above with actual content. Do not just provide checkboxes or placeholder text. This review will be used by automated systems to make merge decisions.
 
           # Optional: Use sticky comments to make Claude reuse comment on subsequent pushes
           use_sticky_comment: true
@@ -89,15 +101,42 @@ jobs:
           # Get the Claude review comment from the PR
           PR_NUMBER=${{ github.event.pull_request.number }}
           
-          # Wait a moment for comment to be posted
-          sleep 10
+          echo "🔍 Waiting for Claude's comprehensive review to be posted..."
           
-          # Get Claude's most recent substantial comment on this PR
-          CLAUDE_REVIEW_CONTENT=$(gh pr view $PR_NUMBER \
-            --repo ${{ github.repository }} \
-            --json comments \
-            --jq '.comments[] | select(.author.login == "claude" and (.body | length > 100)) | .body' \
-            | tail -1)
+          # Wait longer and poll multiple times for comprehensive review content
+          MAX_ATTEMPTS=12  # 2 minutes total (12 * 10 seconds)
+          ATTEMPT=1
+          CLAUDE_REVIEW_CONTENT=""
+          
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            echo "📋 Attempt $ATTEMPT/$MAX_ATTEMPTS: Looking for Claude review content..."
+            
+            # Look for Claude comments with comprehensive content (contains key review markers)
+            POTENTIAL_REVIEW=$(gh pr view $PR_NUMBER \
+              --repo ${{ github.repository }} \
+              --json comments \
+              --jq '.comments[] | select(.author.login == "claude" and (.body | contains("Code Review") or contains("Analysis") or contains("## ") or contains("**") or length > 200)) | .body' \
+              | tail -1)
+            
+            if [ -n "$POTENTIAL_REVIEW" ] && [ "$POTENTIAL_REVIEW" != "null" ]; then
+              # Check if this looks like a comprehensive review (not just a checkbox)
+              if echo "$POTENTIAL_REVIEW" | grep -q -E "(Code Review|Analysis|Security|Quality|Performance|## |Review Summary|Key Findings)"; then
+                CLAUDE_REVIEW_CONTENT="$POTENTIAL_REVIEW"
+                echo "✅ Found comprehensive Claude review content (${#CLAUDE_REVIEW_CONTENT} characters)"
+                break
+              else
+                echo "⚠️ Found Claude comment (${#POTENTIAL_REVIEW} chars) but appears to be initial response, waiting for full review..."
+              fi
+            else
+              echo "📋 No substantial Claude comment found yet..."
+            fi
+            
+            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+              echo "⏳ Waiting 10 seconds before next attempt..."
+              sleep 10
+            fi
+            ATTEMPT=$((ATTEMPT + 1))
+          done
           
           if [ -n "$CLAUDE_REVIEW_CONTENT" ] && [ "$CLAUDE_REVIEW_CONTENT" != "null" ]; then
             echo "✅ Successfully captured Claude review content (${#CLAUDE_REVIEW_CONTENT} characters)"
@@ -109,22 +148,50 @@ jobs:
             if [ -f "$RUN_DIR/claude-review-analysis.md" ]; then
               FILE_SIZE=$(wc -c < "$RUN_DIR/claude-review-analysis.md")
               echo "📄 Review analysis file created: $FILE_SIZE bytes"
-              echo "📝 File preview:"
-              head -5 "$RUN_DIR/claude-review-analysis.md"
+              echo "📝 File preview (first 300 chars):"
+              head -c 300 "$RUN_DIR/claude-review-analysis.md"
+              echo ""
+              echo "..."
             else
               echo "❌ Failed to create review analysis file"
             fi
           else
-            echo "⚠️ No substantial Claude review comment found, creating placeholder"
-            echo "# Claude Code Review - No Content Captured" > "$RUN_DIR/claude-review-analysis.md"
-            echo "" >> "$RUN_DIR/claude-review-analysis.md"
-            echo "⚠️ Claude review content was not successfully captured from the PR comments." >> "$RUN_DIR/claude-review-analysis.md"
-            echo "This could be due to:" >> "$RUN_DIR/claude-review-analysis.md"
-            echo "- Review still in progress" >> "$RUN_DIR/claude-review-analysis.md"
-            echo "- Comment not yet posted" >> "$RUN_DIR/claude-review-analysis.md"
-            echo "- API timing issues" >> "$RUN_DIR/claude-review-analysis.md"
-            echo "" >> "$RUN_DIR/claude-review-analysis.md"
-            echo "The merge decision workflow should use fallback methods to access the review content." >> "$RUN_DIR/claude-review-analysis.md"
+            echo "⚠️ No comprehensive Claude review found after $MAX_ATTEMPTS attempts"
+            echo "🔍 Creating detailed fallback content with available information..."
+            
+            # Create a more informative fallback
+            cat > "$RUN_DIR/claude-review-analysis.md" << 'EOF'
+# Claude Code Review - Comprehensive Analysis Not Captured
+
+⚠️ **Status**: Claude's comprehensive review content was not successfully captured from PR comments.
+
+## Possible Causes:
+- Claude review workflow completed before comprehensive analysis was posted
+- Claude provided only initial acknowledgment without detailed review
+- Timing issues between workflow steps
+- API rate limiting or connectivity issues
+
+## Available Information:
+- Claude review workflow ran successfully
+- No comprehensive review markers found in comments
+- This indicates a workflow timing or content capture issue
+
+## Recommended Actions for Merge Decision:
+1. Check for Claude comments manually in the PR
+2. Use fallback analysis based on CI status and file changes
+3. Apply conservative merge decision (MANUAL_APPROVAL) when review content is missing
+4. Consider this a process issue, not a code quality issue
+
+## Merge Decision Guidance:
+- If all CI checks pass and changes are simple: MANUAL_APPROVAL recommended
+- If critical CI failures exist: REJECT recommended  
+- If security-sensitive changes: REJECT until manual review
+- Default fallback: MANUAL_APPROVAL for human verification
+
+**Note**: This is a workflow issue, not an indication of code problems.
+EOF
+            
+            echo "📄 Fallback content created with guidance for merge decision workflow"
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
