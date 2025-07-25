@@ -405,23 +405,42 @@ jobs:
           echo "Searching for Claude review artifacts for PR #$PR_NUMBER"
           
           # Get list of artifacts and find the most recent Claude review with run info
-          set +e  # Don't exit on error for error handling
-          ALL_ARTIFACTS=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts" 2>/dev/null)
-          if [ $? -ne 0 ] || [ -z "$ALL_ARTIFACTS" ]; then
+          echo "🔍 Fetching artifacts from GitHub API..."
+          ALL_ARTIFACTS=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts" 2>&1)
+          if [ $? -ne 0 ]; then
             echo "❌ Failed to fetch artifacts from GitHub API"
+            echo "API Response: $ALL_ARTIFACTS"
             echo "analysis_available=false" >> $GITHUB_OUTPUT
-            set -e
             exit 0
           fi
           
-          ARTIFACT_DATA=$(echo "$ALL_ARTIFACTS" | jq --arg pr_prefix "claude-review-analysis-$PR_NUMBER-" '.artifacts[] | select(.name | startswith($pr_prefix)) | {name: .name, id: .id, workflow_run: .workflow_run.id}' 2>/dev/null | head -1)
-          if [ $? -ne 0 ] || [ -z "$ARTIFACT_DATA" ] || [ "$ARTIFACT_DATA" = "null" ]; then
-            echo "❌ Failed to parse artifacts JSON or no matching artifacts found"
+          echo "📄 Raw API response length: ${#ALL_ARTIFACTS} characters"
+          echo "🔍 First 200 chars: ${ALL_ARTIFACTS:0:200}"
+          
+          # Use a simple approach - search by name pattern directly in GitHub CLI
+          echo "🔍 Searching for Claude review artifacts using name pattern..."
+          CLAUDE_ARTIFACTS=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts" --jq ".artifacts[] | select(.name | startswith(\"claude-review-analysis-$PR_NUMBER-\")) | .name" 2>/dev/null | head -5)
+          
+          if [ -z "$CLAUDE_ARTIFACTS" ]; then
+            echo "⚠️ No Claude review artifacts found for PR #$PR_NUMBER"
+            echo "📋 Available artifacts containing 'claude':"
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts" --jq '.artifacts[] | select(.name | contains("claude")) | .name' 2>/dev/null | head -5 || echo "None found"
             echo "analysis_available=false" >> $GITHUB_OUTPUT
-            set -e
             exit 0
           fi
-          set -e  # Re-enable exit on error
+          
+          # Get the first matching artifact name
+          ARTIFACT_NAME=$(echo "$CLAUDE_ARTIFACTS" | head -1)
+          echo "🎯 Found Claude artifact: $ARTIFACT_NAME"
+          
+          # Get the full artifact details
+          ARTIFACT_DATA=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts" --jq ".artifacts[] | select(.name == \"$ARTIFACT_NAME\") | {name: .name, id: .id, workflow_run: .workflow_run.id}" 2>/dev/null)
+          
+          if [ -z "$ARTIFACT_DATA" ] || [ "$ARTIFACT_DATA" = "null" ]; then
+            echo "❌ Failed to get artifact details for $ARTIFACT_NAME"
+            echo "analysis_available=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
           
           if [ -n "$ARTIFACT_DATA" ] && [ "$ARTIFACT_DATA" != "null" ]; then
             # Extract individual fields without CSV parsing
