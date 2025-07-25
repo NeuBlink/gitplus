@@ -51,7 +51,7 @@ jobs:
         id: wait-for-claude-review
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          checkName: code-review
+          checkName: claude-review
           ref: ${{ github.event.pull_request.head.sha }}
           timeoutSeconds: 1200
           intervalSeconds: 15
