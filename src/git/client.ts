@@ -230,13 +230,36 @@ export class GitClient {
   private detectPlatform(remoteURL: string): Platform {
     if (!remoteURL) return Platform.LocalOnly;
     
-    const url = remoteURL.toLowerCase();
-    if (url.includes('github.com')) {
-      return Platform.GitHub;
-    } else if (url.includes('gitlab.com') || url.includes('gitlab')) {
-      return Platform.GitLab;
-    } else {
-      return Platform.LocalOnly;
+    try {
+      // Handle SSH URLs like git@github.com:user/repo.git
+      let normalizedUrl = remoteURL;
+      if (remoteURL.startsWith('git@')) {
+        const sshMatch = remoteURL.match(/git@([^:]+):(.+)/);
+        if (sshMatch) {
+          normalizedUrl = `https://${sshMatch[1]}/${sshMatch[2]}`;
+        }
+      }
+      
+      const url = new URL(normalizedUrl);
+      const hostname = url.hostname.toLowerCase();
+      
+      if (hostname === 'github.com') {
+        return Platform.GitHub;
+      } else if (hostname === 'gitlab.com' || hostname.endsWith('.gitlab.com')) {
+        return Platform.GitLab;
+      } else {
+        return Platform.LocalOnly;
+      }
+    } catch (error) {
+      // If URL parsing fails, fall back to safer string matching
+      const cleanUrl = remoteURL.toLowerCase();
+      if (cleanUrl.match(/^https?:\/\/github\.com\//)) {
+        return Platform.GitHub;
+      } else if (cleanUrl.match(/^https?:\/\/gitlab\.com\//)) {
+        return Platform.GitLab;
+      } else {
+        return Platform.LocalOnly;
+      }
     }
   }
 

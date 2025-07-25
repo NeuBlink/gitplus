@@ -4,14 +4,6 @@ on:
   # Run as a required status check on every PR
   pull_request:
     types: [opened, synchronize, reopened]
-  
-  # Also run when manually triggered
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: 'PR number to evaluate'
-        required: true
-        type: number
 
 permissions:
   contents: read
