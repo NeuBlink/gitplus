@@ -137,32 +137,59 @@ jobs:
           fi
           echo "IS_RELEASE_PLEASE=$IS_RELEASE_PLEASE" >> $GITHUB_OUTPUT
           
-          # Get Claude review comments
-          echo "CLAUDE_REVIEWS<<EOF" >> $GITHUB_OUTPUT
-          gh pr view $PR_NUMBER \
-            --repo ${{ github.repository }} \
-            --json comments \
-            --jq '.comments[] | select(.author.login == "claude") | .body' \
-            | tail -n 1 >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          # Get complete Claude review comment (only after claude-review check is SUCCESS)
+          if [ "$CLAUDE_RESULT" = "SUCCESS" ]; then
+            echo "🔍 Fetching complete Claude review comment..."
+            
+            # Get all Claude comments and find the review comment (not task completion)
+            CLAUDE_REVIEW_COMMENT=$(gh pr view $PR_NUMBER \
+              --repo ${{ github.repository }} \
+              --json comments \
+              --jq '.comments[] | select(.author.login == "claude" and (.body | contains("Review Summary") or contains("## ") or contains("### ") or contains("####"))) | .body' \
+              | tail -n 1)
+            
+            if [ -n "$CLAUDE_REVIEW_COMMENT" ] && [ "$CLAUDE_REVIEW_COMMENT" != "null" ]; then
+              echo "✅ Found Claude review comment (${#CLAUDE_REVIEW_COMMENT} characters)"
+              echo "CLAUDE_REVIEW_CONTENT<<EOF" >> $GITHUB_OUTPUT
+              echo "$CLAUDE_REVIEW_COMMENT" >> $GITHUB_OUTPUT
+              echo "EOF" >> $GITHUB_OUTPUT
+            else
+              echo "⚠️ No Claude review comment found, using fallback"
+              echo "CLAUDE_REVIEW_CONTENT=No detailed review content available" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "⚠️ Claude review not successful, no review content available"
+            echo "CLAUDE_REVIEW_CONTENT=Claude review check did not complete successfully" >> $GITHUB_OUTPUT
+          fi
           
-          # Get specific check states
-          TEST_RESULT=$(gh pr checks $PR_NUMBER \
-            --repo ${{ github.repository }} \
-            --json name,state \
-            | jq -r '.[] | select(.name == "test (20.x)") | .state // "PENDING"')
-          SECURITY_RESULT=$(gh pr checks $PR_NUMBER \
-            --repo ${{ github.repository }} \
-            --json name,state \
-            | jq -r '.[] | select(.name == "security") | .state // "PENDING"')
-          CLAUDE_RESULT=$(gh pr checks $PR_NUMBER \
-            --repo ${{ github.repository }} \
-            --json name,state \
-            | jq -r '.[] | select(.name == "claude-review") | .state // "PENDING"')
+          # Get detailed CI check information
+          echo "🔍 Gathering detailed CI check information..."
+          
+          # Get all checks summary
+          ALL_CHECKS=$(gh pr checks $PR_NUMBER --repo ${{ github.repository }} --json name,state)
+          
+          # Key check states
+          TEST_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "test (20.x)") | .state // "PENDING"')
+          SECURITY_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "security") | .state // "PENDING"')
+          CLAUDE_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "claude-review") | .state // "PENDING"')
+          VALIDATE_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "validate-pr") | .state // "PENDING"')
+          
+          # Count passed/failed checks
+          PASSED_CHECKS=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.state == "SUCCESS") | .name' | wc -l)
+          FAILED_CHECKS=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.state == "FAILURE") | .name' | wc -l)
+          TOTAL_CHECKS=$(echo "$ALL_CHECKS" | jq -r '.[] | .name' | wc -l)
+          
+          # Get failed check names if any
+          FAILED_CHECK_NAMES=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.state == "FAILURE") | .name' | tr '\n' ', ' | sed 's/,$//')
           
           echo "TEST_CONCLUSION=$TEST_RESULT" >> $GITHUB_OUTPUT
           echo "SECURITY_CONCLUSION=$SECURITY_RESULT" >> $GITHUB_OUTPUT
           echo "CLAUDE_REVIEW_CONCLUSION=$CLAUDE_RESULT" >> $GITHUB_OUTPUT
+          echo "VALIDATE_CONCLUSION=$VALIDATE_RESULT" >> $GITHUB_OUTPUT
+          echo "CHECKS_SUMMARY=$PASSED_CHECKS/$TOTAL_CHECKS checks passed" >> $GITHUB_OUTPUT
+          echo "FAILED_CHECKS=$FAILED_CHECK_NAMES" >> $GITHUB_OUTPUT
+          
+          echo "📊 CI Summary: $PASSED_CHECKS passed, $FAILED_CHECKS failed out of $TOTAL_CHECKS total"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -179,179 +206,93 @@ jobs:
           use_sticky_comment: true
           
           direct_prompt: |
-            IMPORTANT: Output ONLY valid JSON. No markdown, no comments, no explanations. ONLY the JSON object.
-            
-            Context:
-            PR Title: ${{ steps.pr-context.outputs.PR_TITLE }}
-            Target Branch: ${{ steps.pr-context.outputs.BASE_BRANCH }}
-            Author: ${{ steps.pr-context.outputs.PR_AUTHOR }}
-            PR Number: #${{ steps.pr-context.outputs.PR_NUMBER }}
-            Is Draft: ${{ steps.pr-context.outputs.PR_IS_DRAFT }}
-            Is Release Please: ${{ steps.pr-context.outputs.IS_RELEASE_PLEASE }}
-            Mergeable: ${{ steps.pr-context.outputs.PR_MERGEABLE }}
-            Merge State: ${{ steps.pr-context.outputs.PR_MERGE_STATE }}
-            Test Status: ${{ steps.pr-context.outputs.TEST_CONCLUSION }}
-            Security Status: ${{ steps.pr-context.outputs.SECURITY_CONCLUSION }}
-            Claude Review Status: ${{ steps.pr-context.outputs.CLAUDE_REVIEW_CONCLUSION }}
-            
-            Claude's Review Comments:
-            ${{ steps.pr-context.outputs.CLAUDE_REVIEWS }}
-            
-            Based on the above, output ONLY this JSON (replace values appropriately):
-            {
-              "decision": "PASS",
-              "confidence": 95,
-              "claude_review_verdict": "Claude strongly approved with no blocking issues",
-              "checks_status": "All checks passed",
-              "blocking_issues": [],
-              "warnings": [],
-              "summary": "PR approved - Claude review positive and all checks passed"
-            }
-            
-            Rules:
-            - decision must be "PASS" or "FAIL" (no other values)
-            - For Release Please PRs: PASS if all checks are SUCCESS (tests, security, Claude review)
-            - For regular PRs: FAIL if Claude rejected or found blocking issues
-            - FAIL if tests or security checks are not SUCCESS
-            - FAIL if PR is not mergeable or has conflicts
-            - PASS only if Claude approved AND all checks are SUCCESS
-            
-            OUTPUT ONLY THE JSON OBJECT. NOTHING ELSE.
+            You are an AI merge decision maker. Analyze the complete context below and decide whether this PR should be merged.
 
-      - name: Parse and apply decision
+            ## PR Information
+            - **Title**: ${{ steps.pr-context.outputs.PR_TITLE }}
+            - **Author**: ${{ steps.pr-context.outputs.PR_AUTHOR }}
+            - **Target Branch**: ${{ steps.pr-context.outputs.BASE_BRANCH }}
+            - **PR Number**: #${{ steps.pr-context.outputs.PR_NUMBER }}
+            - **Is Draft**: ${{ steps.pr-context.outputs.PR_IS_DRAFT }}
+            - **Is Release Please PR**: ${{ steps.pr-context.outputs.IS_RELEASE_PLEASE }}
+            - **Mergeable**: ${{ steps.pr-context.outputs.PR_MERGEABLE }}
+            - **Merge State**: ${{ steps.pr-context.outputs.PR_MERGE_STATE }}
+
+            ## CI/CD Check Results
+            - **Overall Summary**: ${{ steps.pr-context.outputs.CHECKS_SUMMARY }}
+            - **Tests**: ${{ steps.pr-context.outputs.TEST_CONCLUSION }}
+            - **Security**: ${{ steps.pr-context.outputs.SECURITY_CONCLUSION }}
+            - **Validation**: ${{ steps.pr-context.outputs.VALIDATE_CONCLUSION }}
+            - **Claude Review**: ${{ steps.pr-context.outputs.CLAUDE_REVIEW_CONCLUSION }}
+            - **Failed Checks**: ${{ steps.pr-context.outputs.FAILED_CHECKS }}
+
+            ## Complete Claude Code Review Analysis
+            ${{ steps.pr-context.outputs.CLAUDE_REVIEW_CONTENT }}
+
+            ## Your Task
+            Based on the complete context above, especially Claude's detailed review analysis, decide whether this PR should be merged.
+
+            **Decision Criteria:**
+            - For Release Please PRs: Merge if all CI checks passed
+            - For regular PRs: Consider Claude's review intent, recommendations, and any blocking issues
+            - Don't merge if there are unresolved blocking issues or security concerns
+            - Consider the overall CI health and any failed checks
+
+            **Output Format:**
+            Respond with a clear decision and reasoning. You may include:
+            - Your decision (MERGE/DO NOT MERGE)
+            - Key reasoning based on Claude's review
+            - Any concerns or recommendations
+            - Action items if applicable
+
+            Make your decision based on the complete context, especially Claude's detailed analysis above.
+
+      - name: Apply merge decision
         run: |
-          set -e  # Exit on error
+          echo "📋 Processing merge decision from Claude AI..."
           
-          echo "🔍 Waiting for Claude's response (with retries)..."
+          # Wait for Claude's decision comment
+          sleep 10
           
-          # Function to fetch Claude response with retries
-          fetch_claude_response() {
-            local attempt=1
-            local max_attempts=5
-            local wait_time=15
-            
-            while [ $attempt -le $max_attempts ]; do
-              echo "Attempt $attempt/$max_attempts: Fetching Claude response..."
-              
-              CLAUDE_RESPONSE=$(gh pr view ${{ steps.pr-context.outputs.PR_NUMBER }} \
-                --repo ${{ github.repository }} \
-                --json comments \
-                --jq '.comments[-1] | select(.author.login == "claude") | .body' 2>/dev/null || echo "")
-              
-              if [ -n "$CLAUDE_RESPONSE" ] && [ "$CLAUDE_RESPONSE" != "null" ]; then
-                echo "✅ Found Claude response (length: ${#CLAUDE_RESPONSE} chars)"
-                echo "📝 Claude response preview:"
-                echo "$CLAUDE_RESPONSE" | head -5
-                return 0
-              fi
-              
-              if [ $attempt -lt $max_attempts ]; then
-                echo "❌ No Claude response found, waiting ${wait_time}s before retry..."
-                sleep $wait_time
-              fi
-              
-              attempt=$((attempt + 1))
-            done
-            
-            echo "❌ Failed to get Claude response after $max_attempts attempts"
-            return 1
-          }
+          # Get the latest Claude comment (merge decision)
+          CLAUDE_DECISION=$(gh pr view ${{ steps.pr-context.outputs.PR_NUMBER }} \
+            --repo ${{ github.repository }} \
+            --json comments \
+            --jq '.comments[-1] | select(.author.login == "claude") | .body' || echo "")
           
-          # Try to get Claude response
-          if ! fetch_claude_response; then
-            echo "⚠️ Claude response not available, falling back to check-based decision..."
+          if [ -n "$CLAUDE_DECISION" ] && [ "$CLAUDE_DECISION" != "null" ]; then
+            echo "✅ Found Claude decision comment"
+            echo "📝 Decision preview:"
+            echo "$CLAUDE_DECISION" | head -10
             
-            # Fallback: Make decision based on check states only
+            # Simple decision detection based on keywords
+            if echo "$CLAUDE_DECISION" | grep -qi "MERGE\|approve\|ready.*merge\|should.*merge"; then
+              DECISION="PASS"
+              SUMMARY="Claude AI approved the PR for merging"
+            else
+              DECISION="FAIL"
+              SUMMARY="Claude AI recommended against merging"
+            fi
+          else
+            echo "⚠️ No Claude decision found, using fallback"
+            # Fallback based on check results
             if [ "${{ steps.pr-context.outputs.TEST_CONCLUSION }}" = "SUCCESS" ] && \
                [ "${{ steps.pr-context.outputs.SECURITY_CONCLUSION }}" = "SUCCESS" ] && \
                [ "${{ steps.pr-context.outputs.CLAUDE_REVIEW_CONCLUSION }}" = "SUCCESS" ]; then
               DECISION="PASS"
-              CONFIDENCE="80"
-              SUMMARY="All checks passed (fallback decision - Claude response unavailable)"
+              SUMMARY="All checks passed (fallback decision)"
             else
               DECISION="FAIL"
-              CONFIDENCE="90"
-              SUMMARY="Some checks failed (fallback decision - Claude response unavailable)"
-            fi
-          else
-            echo "🔍 Parsing Claude response..."
-            
-            # Advanced JSON extraction with multiple strategies
-            extract_json() {
-              local response="$1"
-              local json=""
-              
-              # Strategy 1: JSON code block
-              json=$(echo "$response" | sed -n '/```json/,/```/p' | grep -v '```' | tr -d '\n' | head -1)
-              if [ -n "$json" ] && echo "$json" | jq . >/dev/null 2>&1; then
-                echo "$json"
-                return 0
-              fi
-              
-              # Strategy 2: Find JSON object
-              json=$(echo "$response" | grep -o '{[^{}]*"decision"[^{}]*}' | head -1)
-              if [ -n "$json" ] && echo "$json" | jq . >/dev/null 2>&1; then
-                echo "$json"
-                return 0
-              fi
-              
-              # Strategy 3: Multiline JSON extraction
-              json=$(echo "$response" | sed -n '/{/,/}/p' | tr '\n' ' ' | head -1)
-              if [ -n "$json" ] && echo "$json" | jq . >/dev/null 2>&1; then
-                echo "$json"
-                return 0
-              fi
-              
-              # Strategy 4: Look for decision keywords
-              if echo "$response" | grep -qi "decision.*PASS"; then
-                echo '{"decision":"PASS","confidence":70,"summary":"Parsed from text (PASS found)"}'
-                return 0
-              elif echo "$response" | grep -qi "decision.*FAIL"; then
-                echo '{"decision":"FAIL","confidence":70,"summary":"Parsed from text (FAIL found)"}'
-                return 0
-              fi
-              
-              return 1
-            }
-            
-            JSON_RESPONSE=$(extract_json "$CLAUDE_RESPONSE")
-            
-            if [ -z "$JSON_RESPONSE" ]; then
-              echo "⚠️ Failed to extract JSON, using fallback decision..."
-              DECISION="FAIL"
-              CONFIDENCE="50"
-              SUMMARY="Could not parse Claude response - manual review needed"
-            else
-              echo "✅ Extracted JSON: $JSON_RESPONSE"
-              
-              # Parse with validation
-              DECISION=$(echo "$JSON_RESPONSE" | jq -r '.decision' 2>/dev/null || echo "")
-              CONFIDENCE=$(echo "$JSON_RESPONSE" | jq -r '.confidence' 2>/dev/null || echo "0")
-              SUMMARY=$(echo "$JSON_RESPONSE" | jq -r '.summary' 2>/dev/null || echo "No summary available")
-              
-              # Validate extracted values
-              if [ -z "$DECISION" ] || [ "$DECISION" = "null" ]; then
-                echo "⚠️ Invalid decision value, using fallback..."
-                DECISION="FAIL"
-                CONFIDENCE="50"
-                SUMMARY="Invalid Claude response format - manual review needed"
-              fi
+              SUMMARY="Some checks failed (fallback decision)"
             fi
           fi
           
-          # Normalize confidence
-          if [ -z "$CONFIDENCE" ] || [ "$CONFIDENCE" = "null" ] || ! [[ "$CONFIDENCE" =~ ^[0-9]+$ ]]; then
-            CONFIDENCE="50"
-          fi
-          
-          echo "📊 Final Decision:"
-          echo "   Decision: $DECISION"
-          echo "   Confidence: $CONFIDENCE%"
-          echo "   Summary: $SUMMARY"
+          echo "📊 Final Decision: $DECISION"
+          echo "📝 Summary: $SUMMARY"
           
           # Apply the decision
           if [ "$DECISION" = "PASS" ]; then
-            echo "::notice::✅ Merge Decision: PASS (Confidence: $CONFIDENCE%)"
+            echo "::notice::✅ Merge Decision: APPROVED"
             echo "::notice::$SUMMARY"
             
             # Auto-merge if this is a Release Please PR
@@ -368,30 +309,21 @@ jobs:
               fi
             fi
             
-            # Create success status check (non-blocking)
-            if gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha || github.sha }} \
+            # Create success status (non-blocking)
+            gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha || github.sha }} \
               -f state=success \
               -f description="$SUMMARY" \
-              -f context="merge-decision" 2>/dev/null; then
-              echo "✅ Success status created"
-            else
-              echo "::warning::Failed to create success status check, but continuing..."
-            fi
+              -f context="merge-decision" 2>/dev/null || echo "::warning::Status creation failed"
             
-            exit 0
           else
-            echo "::error::❌ Merge Decision: FAIL (Confidence: $CONFIDENCE%)"
+            echo "::error::❌ Merge Decision: REJECTED"
             echo "::error::$SUMMARY"
             
-            # Create failure status check (non-blocking)
-            if gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha || github.sha }} \
+            # Create failure status (non-blocking)
+            gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha || github.sha }} \
               -f state=failure \
               -f description="$SUMMARY" \
-              -f context="merge-decision" 2>/dev/null; then
-              echo "✅ Failure status created"
-            else
-              echo "::warning::Failed to create failure status check, but continuing..."
-            fi
+              -f context="merge-decision" 2>/dev/null || echo "::warning::Status creation failed"
             
             exit 1
           fi
