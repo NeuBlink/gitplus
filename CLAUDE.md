@@ -155,17 +155,6 @@ All commits MUST follow the conventional commits specification. Valid types:
    - Batch git operations to reduce command overhead
    - Use `--no-verify` flags cautiously and only when safe
 
-### Troubleshooting Common Issues
-
-| Problem | Cause | Solution |
-|---------|-------|----------|
-| Commit fails with "type must be one of [...]" | Used invalid conventional commit type | `git reset --soft HEAD~1` then use GitPlus ship |
-| "GitHub Advanced Security" code scanning alerts | Security vulnerabilities in code | Add explicit permissions, escape inputs, validate URLs |
-| AI service fails | Claude CLI not installed/configured | Install Claude CLI or rely on fallback analysis |
-| PR creation fails | Missing platform CLI (gh/glab) | Install GitHub CLI or GitLab CLI as needed |
-| Merge conflicts during ship | Branch diverged from main | Use GitPlus conflict resolution or manual merge |
-| Tests fail in CI | Code doesn't meet quality standards | Run `npm run validate` locally and fix issues |
-
 ### Integration Guidelines
 
 1. **MCP Server Integration**:
