@@ -160,36 +160,12 @@ jobs:
             echo "🔍 Creating detailed fallback content with available information..."
             
             # Create a more informative fallback
-            cat > "$RUN_DIR/claude-review-analysis.md" << 'EOF'
-# Claude Code Review - Comprehensive Analysis Not Captured
-
-⚠️ **Status**: Claude's comprehensive review content was not successfully captured from PR comments.
-
-## Possible Causes:
-- Claude review workflow completed before comprehensive analysis was posted
-- Claude provided only initial acknowledgment without detailed review
-- Timing issues between workflow steps
-- API rate limiting or connectivity issues
-
-## Available Information:
-- Claude review workflow ran successfully
-- No comprehensive review markers found in comments
-- This indicates a workflow timing or content capture issue
-
-## Recommended Actions for Merge Decision:
-1. Check for Claude comments manually in the PR
-2. Use fallback analysis based on CI status and file changes
-3. Apply conservative merge decision (MANUAL_APPROVAL) when review content is missing
-4. Consider this a process issue, not a code quality issue
-
-## Merge Decision Guidance:
-- If all CI checks pass and changes are simple: MANUAL_APPROVAL recommended
-- If critical CI failures exist: REJECT recommended  
-- If security-sensitive changes: REJECT until manual review
-- Default fallback: MANUAL_APPROVAL for human verification
-
-**Note**: This is a workflow issue, not an indication of code problems.
-EOF
+            echo "# Claude Code Review - Comprehensive Analysis Not Captured" > "$RUN_DIR/claude-review-analysis.md"
+            echo "" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "Status: Claude's comprehensive review content was not successfully captured from PR comments." >> "$RUN_DIR/claude-review-analysis.md"
+            echo "" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "This indicates a workflow timing or content capture issue." >> "$RUN_DIR/claude-review-analysis.md"
+            echo "Recommended: MANUAL_APPROVAL for human verification when review content is missing." >> "$RUN_DIR/claude-review-analysis.md"
             
             echo "📄 Fallback content created with guidance for merge decision workflow"
           fi
