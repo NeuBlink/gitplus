@@ -536,3 +536,4 @@ MIT License - see [LICENSE](LICENSE) file for details.
 ---
 
 Made with ❤️ for the Claude Code community
+<!-- Trigger merge decision re-analysis -->
