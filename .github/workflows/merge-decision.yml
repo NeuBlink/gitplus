@@ -240,6 +240,25 @@ jobs:
           echo "CHECKS_SUMMARY=$PASSED_CHECKS/$TOTAL_CHECKS checks passed" >> $GITHUB_OUTPUT
           echo "FAILED_CHECKS=$FAILED_CHECK_NAMES" >> $GITHUB_OUTPUT
           
+          # Simplified workflow failure context - let AI analyze the raw data
+          echo "🔍 Gathering workflow failure context for AI analysis..."
+          
+          # Get simple failed workflow summary for AI to analyze
+          if [ $FAILED_CHECKS -gt 0 ]; then
+            echo "📋 Collecting failed workflow data for AI analysis..."
+            FAILED_WORKFLOW_RAW=$(gh api repos/${{ github.repository }}/actions/runs \
+              --jq ".workflow_runs[] | select(.head_sha == \"${{ github.event.pull_request.head.sha }}\" and .conclusion == \"failure\") | {name: .name, conclusion: .conclusion, created_at: .created_at, html_url: .html_url}" \
+              | head -5 | jq -s .)
+            
+            WORKFLOW_FAILURE_ANALYSIS="**Failed Workflows Data for AI Analysis:**\\n\\n\\\`\\\`\\\`json\\n$(echo "$FAILED_WORKFLOW_RAW" | jq .)\\n\\\`\\\`\\\`\\n\\n**Summary:** $FAILED_CHECKS workflow(s) failed. AI should analyze the above data to determine if failures are due to code issues, infrastructure problems, or process issues."
+          else
+            WORKFLOW_FAILURE_ANALYSIS="**All Workflows Passed:** No failed workflows detected for this PR. All checks are green."
+          fi
+          
+          echo "WORKFLOW_FAILURE_ANALYSIS<<EOF" >> $GITHUB_OUTPUT
+          echo "$WORKFLOW_FAILURE_ANALYSIS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
           echo "📊 CI Summary: $PASSED_CHECKS passed, $FAILED_CHECKS failed out of $TOTAL_CHECKS total"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -495,6 +514,9 @@ jobs:
             - **Claude Review**: ${{ steps.pr-context.outputs.CLAUDE_REVIEW_CONCLUSION }}
             - **Failed Checks**: ${{ steps.pr-context.outputs.FAILED_CHECKS }}
 
+            ## Workflow Failure Analysis
+            ${{ steps.pr-context.outputs.WORKFLOW_FAILURE_ANALYSIS }}
+
             ## Complete Claude Code Review Analysis
             **IMPORTANT: This is the full Claude review content that must guide your decision:**
             
@@ -522,13 +544,14 @@ jobs:
             **Decision Rules** (in priority order):
             1. **Claude Review Override**: If the Claude review above contains "DO NOT MERGE", "REJECT", or explicitly recommends against merging → REJECT
             2. **Critical CI Failures**: If any critical CI checks failed → REJECT
-            3. **Release Please PRs**: If Release Please PR and all CI checks passed → APPROVE
-            4. **Regular PRs**: Follow Claude's review recommendations:
+            3. **Workflow Failures**: Use AI analysis to distinguish real issues from infrastructure problems - only REJECT if failures indicate actual code/security/test issues
+            4. **Release Please PRs**: If Release Please PR and all CI checks passed → APPROVE
+            5. **Regular PRs**: Follow Claude's review recommendations:
                - If Claude approves changes or finds no blocking issues → APPROVE
                - If Claude identifies critical issues or concerns → REJECT
                - If Claude requests changes → REJECT
-            5. **Good Code, Process Issues**: If code quality is good (tests pass, no critical issues) but there are workflow/review process issues → MANUAL_APPROVAL
-            6. **No Clear Guidance**: If unclear but no major issues detected → MANUAL_APPROVAL
+            6. **Good Code, Process Issues**: If code quality is good (tests pass, no critical issues) but there are workflow/review process issues → MANUAL_APPROVAL
+            7. **No Clear Guidance**: If unclear but no major issues detected → MANUAL_APPROVAL
 
             **Critical**: Your decision must be based primarily on Claude's review content above. The CI status is secondary to Claude's analysis.
 
@@ -552,9 +575,15 @@ jobs:
             **Code Quality:** [Code quality assessment]
             **Test Coverage:** [Test-related findings]
             
+            ## Workflow Failure Assessment
+            
+            **Failed Workflows Analysis:** [Intelligently analyze the workflow data above - distinguish between code quality issues vs infrastructure/process problems]
+            **Failure Root Cause:** [Are failures due to: test failures, security issues, build problems, or just CI infrastructure issues?]
+            **Impact on Merge Decision:** [Only reject if failures indicate actual code/security problems, not infrastructure glitches]
+            
             ## Merge Decision Analysis
             
-            Based on Claude's review and CI status, my decision is...
+            Based on Claude's review, CI status, and workflow failures, my decision is...
             ```
 
             **CRITICAL: You MUST respond with valid JSON in this exact format:**
@@ -847,15 +876,12 @@ jobs:
           if [ "$PR_STATUS" != "CLEAN" ] && [ "$PR_STATUS" != "UNSTABLE" ]; then
             echo "❌ PR is not in a mergeable state: $PR_STATUS"
             gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
-              --body "$(cat <<EOF
-⚠️ **Auto-merge Blocked**
+              --body "⚠️ **Auto-merge Blocked**
 
-❌ **Issue**: PR merge state is '$PR_STATUS'
-✅ **Decision**: $DECISION was approved
+            ❌ **Issue**: PR merge state is '$PR_STATUS'
+            ✅ **Decision**: $DECISION was approved
 
-**Resolution**: Ensure all required checks pass and conflicts are resolved, then try manual merge.
-EOF
-)"
+            **Resolution**: Ensure all required checks pass and conflicts are resolved, then try manual merge."
             exit 0
           fi
           
@@ -868,15 +894,7 @@ EOF
             echo "📋 Auto-merge output: $AUTO_MERGE_OUTPUT"
             
             gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
-              --body "$(cat <<EOF
-🤖 **Auto-merge Enabled** by Claude AI
-
-✅ **Decision**: $DECISION
-🚀 **Method**: $MERGE_METHOD
-
-This PR will be automatically merged once all required status checks pass.
-EOF
-)"
+              --body "🤖 **Auto-merge Enabled** by Claude AI\\n\\n✅ **Decision**: $DECISION\\n🚀 **Method**: $MERGE_METHOD\\n\\nThis PR will be automatically merged once all required status checks pass."
               
           else
             echo "⚠️ Auto-merge failed: $AUTO_MERGE_OUTPUT"
@@ -890,15 +908,7 @@ EOF
               echo "📋 Direct merge output: $DIRECT_MERGE_OUTPUT"
               
               gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
-                --body "$(cat <<EOF
-🤖 **PR Merged** by Claude AI
-
-✅ **Decision**: $DECISION
-🚀 **Method**: $MERGE_METHOD
-
-This PR has been automatically merged.
-EOF
-)"
+                --body "🤖 **PR Merged** by Claude AI\\n\\n✅ **Decision**: $DECISION\\n🚀 **Method**: $MERGE_METHOD\\n\\nThis PR has been automatically merged."
                 
             else
               echo "❌ Direct merge also failed: $DIRECT_MERGE_OUTPUT"
@@ -920,20 +930,7 @@ EOF
               fi
               
               gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
-                --body "$(cat <<EOF
-⚠️ **Auto-merge Failed**
-
-✅ **Decision**: $DECISION (approved by Claude AI)
-❌ **Issue**: $FAILURE_REASON
-
-**Error Details:**
-\`\`\`
-$DIRECT_MERGE_OUTPUT
-\`\`\`
-
-**Manual Action Required**: Please merge this PR manually or review repository settings.
-EOF
-)"
+                --body "⚠️ **Auto-merge Failed**\\n\\n✅ **Decision**: $DECISION (approved by Claude AI)\\n❌ **Issue**: $FAILURE_REASON\\n\\n**Error Details:**\\n\\\`\\\`\\\`\\n$DIRECT_MERGE_OUTPUT\\n\\\`\\\`\\\`\\n\\n**Manual Action Required**: Please merge this PR manually or review repository settings."
               
               # Set output but don't fail the workflow
               echo "auto_merge_failed=true" >> $GITHUB_OUTPUT
@@ -956,18 +953,7 @@ EOF
           echo "📝 Reason: $REASON"
           
           # Create the comment body
-          COMMENT_BODY="$(cat <<EOF
-👤 **Manual Approval Required**
-
-📋 **Reason**: $REASON
-🔍 **Action**: Human review needed before merge
-
-Claude AI determined this PR has good code quality but requires manual verification before merging.
-
----
-*🤖 This is an automated comment that gets updated on new pushes*
-EOF
-)"
+          COMMENT_BODY="👤 **Manual Approval Required**\\n\\n📋 **Reason**: $REASON\\n🔍 **Action**: Human review needed before merge\\n\\nClaude AI determined this PR has good code quality but requires manual verification before merging.\\n\\n---\\n*🤖 This is an automated comment that gets updated on new pushes*"
           
           # Check for existing manual approval comment and update it (sticky behavior)
           EXISTING_COMMENT_ID=$(gh api repos/${{ github.repository }}/issues/$PR_NUMBER/comments \

@@ -103,9 +103,7 @@ jobs:
             echo "✅ Successfully captured Claude review content (${#CLAUDE_REVIEW_CONTENT} characters)"
             
             # Save the complete review to artifact file
-            cat > "$RUN_DIR/claude-review-analysis.md" << 'EOF'
-$CLAUDE_REVIEW_CONTENT
-EOF
+            echo "$CLAUDE_REVIEW_CONTENT" > "$RUN_DIR/claude-review-analysis.md"
             
             # Verify file was created successfully
             if [ -f "$RUN_DIR/claude-review-analysis.md" ]; then
@@ -118,7 +116,7 @@ EOF
             fi
           else
             echo "⚠️ No substantial Claude review comment found, creating placeholder"
-            cat > "$RUN_DIR/claude-review-analysis.md" << 'EOF'
+            cat > "$RUN_DIR/claude-review-analysis.md" << 'PLACEHOLDER_EOF'
 # Claude Code Review - No Content Captured
 
 ⚠️ Claude review content was not successfully captured from the PR comments. 
@@ -128,7 +126,7 @@ This could be due to:
 - API timing issues
 
 The merge decision workflow should use fallback methods to access the review content.
-EOF
+PLACEHOLDER_EOF
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
