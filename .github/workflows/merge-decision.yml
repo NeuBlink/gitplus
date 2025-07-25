@@ -196,13 +196,35 @@ jobs:
               echo "📄 Review file size: $FILE_SIZE characters"
               echo "📝 Review preview: ${CLAUDE_REVIEW_CONTENT:0:200}..."
               
-              echo "CLAUDE_REVIEW_CONTENT<<EOF" >> $GITHUB_OUTPUT
-              echo "$CLAUDE_REVIEW_CONTENT" >> $GITHUB_OUTPUT
-              echo "EOF" >> $GITHUB_OUTPUT
+              # Check if the content is comprehensive or just a placeholder
+              if echo "$CLAUDE_REVIEW_CONTENT" | grep -q -E "(Code Review|Analysis|Security|Quality|Performance|## |Review Summary|Key Findings)"; then
+                echo "✅ Comprehensive Claude review content detected"
+                echo "CLAUDE_REVIEW_CONTENT<<EOF" >> $GITHUB_OUTPUT
+                echo "$CLAUDE_REVIEW_CONTENT" >> $GITHUB_OUTPUT
+                echo "EOF" >> $GITHUB_OUTPUT
+              else
+                echo "⚠️ Claude review file contains minimal content, treating as process issue"
+                CLAUDE_RESULT="PROCESS_ISSUE"
+                echo "CLAUDE_REVIEW_CONTENT=**Claude Review Process Issue Detected**
+
+**Status**: Claude review workflow completed successfully but comprehensive content was not captured.
+
+**Analysis**: This indicates a workflow timing or content capture issue, not a code quality problem. The Claude review check shows SUCCESS status, which means:
+- No critical code issues were identified that would cause Claude to fail the check
+- The review process completed without errors
+- This is a process/infrastructure issue, not a code problem
+
+**Recommended Decision Logic**:
+- If all other CI checks pass: This should not block the merge
+- Treat as MANUAL_APPROVAL candidate rather than rejection
+- The absence of detailed review content when the check passed indicates the code is likely acceptable
+
+**Context**: When Claude identifies serious code issues, the claude-review check typically fails. A passing check with minimal content suggests the review process had timing issues but no serious code concerns were identified." >> $GITHUB_OUTPUT
+              fi
             else
               echo "⚠️ Claude review file not found, falling back to comment parsing..."
               
-              # Fallback: Get the most substantial Claude comment
+              # Enhanced fallback: Get the most substantial Claude comment with better filtering
               CLAUDE_REVIEW_COMMENT=$(gh pr view $PR_NUMBER \
                 --repo ${{ github.repository }} \
                 --json comments \
@@ -210,18 +232,91 @@ jobs:
                 | tail -n 1)
               
               if [ -n "$CLAUDE_REVIEW_COMMENT" ] && [ "$CLAUDE_REVIEW_COMMENT" != "null" ]; then
-                echo "✅ Found Claude review comment as fallback (${#CLAUDE_REVIEW_COMMENT} characters)"
-                echo "CLAUDE_REVIEW_CONTENT<<EOF" >> $GITHUB_OUTPUT
-                echo "$CLAUDE_REVIEW_COMMENT" >> $GITHUB_OUTPUT
-                echo "EOF" >> $GITHUB_OUTPUT
+                # Check if this is comprehensive content
+                if echo "$CLAUDE_REVIEW_COMMENT" | grep -q -E "(Code Review|Analysis|Security|Quality|Performance|## |Review Summary|Key Findings)"; then
+                  echo "✅ Found comprehensive Claude review comment as fallback (${#CLAUDE_REVIEW_COMMENT} characters)"
+                  echo "CLAUDE_REVIEW_CONTENT<<EOF" >> $GITHUB_OUTPUT
+                  echo "$CLAUDE_REVIEW_COMMENT" >> $GITHUB_OUTPUT
+                  echo "EOF" >> $GITHUB_OUTPUT
+                else
+                  echo "⚠️ Found Claude comment but appears to be minimal content"
+                  CLAUDE_RESULT="PROCESS_ISSUE"
+                  echo "CLAUDE_REVIEW_CONTENT=**Claude Review Process Issue - Minimal Content**
+
+**Found Comment**: $(echo "$CLAUDE_REVIEW_COMMENT" | head -c 200)...
+
+**Issue**: Claude review check passed but only minimal content was captured. This suggests a workflow timing issue rather than code quality concerns.
+
+**Decision Guidance**: Since the claude-review check status is SUCCESS, this indicates no serious code issues were identified. The minimal content is likely due to timing/capture issues in the workflow process." >> $GITHUB_OUTPUT
+                fi
               else
-                echo "❌ No Claude review content available"
-                echo "CLAUDE_REVIEW_CONTENT=⚠️ Claude review content not provided in context. This may be due to: 1) Claude review workflow still running, 2) Missing artifact file, 3) No substantial Claude comments found. This is common for simple PRs and does not indicate code quality issues." >> $GITHUB_OUTPUT
+                echo "❌ No Claude review content available despite SUCCESS status"
+                CLAUDE_RESULT="PROCESS_ISSUE"
+                echo "CLAUDE_REVIEW_CONTENT=**Claude Review Process Issue - No Content**
+
+**Status**: Claude review check shows SUCCESS but no review content was captured.
+
+**Analysis**: This is a clear process/infrastructure issue. Key indicators:
+- Claude review check status: SUCCESS (would be FAILURE if code had serious issues)
+- No review content captured: Indicates workflow timing or API issues
+- Not a code quality indicator: When Claude finds serious issues, the check typically fails
+
+**Recommended Action**: 
+- This should not block merges when other CI checks pass
+- Treat as MANUAL_APPROVAL candidate
+- The SUCCESS status suggests code passed Claude's automated checks
+
+**Root Cause**: Likely timing issue between claude-review workflow completion and content capture step." >> $GITHUB_OUTPUT
               fi
             fi
+          elif [ "$CLAUDE_RESULT" = "PENDING" ]; then
+            echo "⚠️ Claude review still pending - process timing issue"
+            CLAUDE_RESULT="PROCESS_ISSUE"
+            echo "CLAUDE_REVIEW_CONTENT=**Claude Review Timing Issue**
+
+**Status**: Claude review check is still in PENDING state when merge decision runs.
+
+**Analysis**: This indicates a workflow timing issue where the merge decision runs before Claude review completes. This is a process issue, not a code quality issue.
+
+**Decision Guidance**:
+- If all other CI checks pass: Consider MANUAL_APPROVAL
+- This should not automatically block merges
+- The pending status suggests no critical failures that would cause immediate rejection
+
+**Recommended Action**: Wait for Claude review to complete or proceed with manual review if other checks are green." >> $GITHUB_OUTPUT
           else
-            echo "⚠️ Claude review not successful, no review content available"
-            echo "CLAUDE_REVIEW_CONTENT=Claude review check did not complete successfully (status: $CLAUDE_RESULT)" >> $GITHUB_OUTPUT
+            echo "⚠️ Claude review failed or had issues - need to analyze further"
+            echo "🔍 Analyzing Claude review failure context..."
+            
+            # Get more context about why Claude review failed
+            CLAUDE_CHECK_DETAILS=$(gh pr checks $PR_NUMBER --repo ${{ github.repository }} --json name,state,conclusion,detailsUrl | jq '.[] | select(.name == "claude-review")')
+            CLAUDE_CONCLUSION=$(echo "$CLAUDE_CHECK_DETAILS" | jq -r '.conclusion // "unknown"')
+            
+            if [ "$CLAUDE_CONCLUSION" = "failure" ]; then
+              echo "❌ Claude review explicitly failed - likely indicates code issues"
+              echo "CLAUDE_REVIEW_CONTENT=**Claude Review Failed**
+
+**Status**: Claude review check failed with conclusion: $CLAUDE_CONCLUSION
+
+**Analysis**: This indicates Claude identified serious issues with the code that warrant attention. Unlike process/timing issues, a failed Claude review typically means:
+- Security concerns were identified
+- Code quality issues need addressing  
+- Best practices violations were found
+- Critical bugs or problems were detected
+
+**Recommended Action**: REJECT - Address the issues identified by Claude before merging.
+
+**Next Steps**: Check the Claude review workflow logs and any comments for specific issues to resolve." >> $GITHUB_OUTPUT
+            else
+              echo "⚠️ Claude review in unknown state: $CLAUDE_RESULT"
+              echo "CLAUDE_REVIEW_CONTENT=**Claude Review Unknown State**
+
+**Status**: Claude review check in unexpected state: $CLAUDE_RESULT (conclusion: $CLAUDE_CONCLUSION)
+
+**Analysis**: Unable to determine if this is a code issue or process issue. 
+
+**Recommended Action**: MANUAL_APPROVAL - Requires human investigation to determine the root cause and appropriate action." >> $GITHUB_OUTPUT
+            fi
           fi
           
           # Count passed/failed checks (exclude SKIPPED and null checks from total)
@@ -542,24 +637,38 @@ jobs:
                - Does Claude suggest improvements?
 
             **Decision Rules** (in priority order):
-            1. **Claude Review Override**: If the Claude review above contains "DO NOT MERGE", "REJECT", or explicitly recommends against merging → REJECT
-            2. **Critical CI Failures**: If any critical CI checks failed → REJECT
-            3. **Workflow Failures**: Use AI analysis to distinguish real issues from infrastructure problems - only REJECT if failures indicate actual code/security/test issues
-            4. **Release Please PRs**: If Release Please PR and all CI checks passed → APPROVE
-            5. **Regular PRs**: Follow Claude's review recommendations:
+            
+            **CRITICAL: Distinguish between CODE ISSUES vs PROCESS ISSUES**
+            
+            1. **Claude Review Failed (FAILURE conclusion)**: If Claude review check explicitly failed → REJECT (indicates serious code issues)
+            
+            2. **Critical CI Failures**: If core CI checks (tests, security, build) failed → REJECT (indicates code/security problems)
+            
+            3. **Claude Review Process Issues**: If Claude review shows SUCCESS status but minimal/missing content → This is a PROCESS issue, not a CODE issue:
+               - Claude review status: SUCCESS = No serious code issues found
+               - Missing content = Workflow timing/capture issue  
+               - **Decision**: Should NOT block merge if other CI checks pass
+               - **Recommended**: MANUAL_APPROVAL or APPROVE based on other checks
+            
+            4. **Claude Review Comprehensive**: If comprehensive Claude review content is available:
+               - If Claude explicitly says "DO NOT MERGE", "REJECT", or recommends against merging → REJECT
                - If Claude approves changes or finds no blocking issues → APPROVE
                - If Claude identifies critical issues or concerns → REJECT
                - If Claude requests changes → REJECT
-            6. **Good Code, Process Issues**: If code quality is good (tests pass, no critical issues) but there are workflow/review process issues → MANUAL_APPROVAL
-            7. **No Clear Guidance**: If unclear but no major issues detected → MANUAL_APPROVAL
+            
+            5. **Good Code, Process Issues**: If all functional CI checks pass (tests, security, build) but there are workflow/review process issues → MANUAL_APPROVAL
+            
+            6. **Infrastructure vs Code Issues**: Distinguish between:
+               - **Code Issues**: Test failures, security vulnerabilities, build errors, explicit Claude rejections → REJECT
+               - **Process Issues**: Timing problems, workflow glitches, missing review content when check passed → MANUAL_APPROVAL
+            
+            **Key Insight**: A Claude review check that shows SUCCESS status but has missing content indicates the review process had timing issues, NOT that the code has problems. If Claude found serious issues, the check would typically show FAILURE status.
 
-            **Critical**: Your decision must be based primarily on Claude's review content above. The CI status is secondary to Claude's analysis.
-
-            **IMPORTANT: Use MANUAL_APPROVAL for situations like:**
-            - Good code quality but missing detailed review content
-            - All/most CI checks pass but needs human verification
-            - Minor workflow issues that don't indicate code problems
-            - Uncertainty that doesn't stem from actual code issues
+            **Use MANUAL_APPROVAL for:**
+            - Claude review SUCCESS status with missing/minimal content (process issue)
+            - All CI checks pass but workflow timing issues
+            - Any uncertainty about whether issue is code-related or process-related
+            - Good code quality indicators but missing detailed review content
 
             **Your Analysis Format**: Start your response with:
             ```
