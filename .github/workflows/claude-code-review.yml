@@ -33,32 +33,101 @@ jobs:
           
           # Direct prompt for automated review (no @claude mention needed)
           direct_prompt: |
-            Please review this pull request and provide feedback on:
+            Please review this pull request and provide comprehensive feedback on:
             - Code quality and best practices
             - Potential bugs or issues
             - Performance considerations
             - Security concerns
             - Test coverage
+            - Architecture and design
+            - Documentation quality
             
-            Be constructive and helpful in your feedback.
+            **Please structure your review as follows:**
             
-            **IMPORTANT**: After completing your review, save your COMPLETE review output to a file:
+            ## Code Review Summary
             
-            ```bash
-            # Create unique directory for this workflow run
-            RUN_DIR="/tmp/claude-review-${{ github.run_id }}-${{ github.run_attempt }}"
-            mkdir -p "$RUN_DIR"
+            **Overall Assessment:** [Your overall assessment - Approve, Request Changes, or Comment]
             
-            # Save your entire review output to file (copy everything you just wrote above)
-            cat > "$RUN_DIR/claude-review-analysis.md" << 'EOF'
-            [PASTE YOUR COMPLETE REVIEW OUTPUT HERE - INCLUDING ALL DETAILS, ANALYSIS, FINDINGS, RECOMMENDATIONS, EVERYTHING YOU WROTE ABOVE]
-            EOF
-            ```
+            **Key Findings:**
+            - [List your main findings here]
             
-            **Critical**: The file must contain your FULL review - all code analysis, security findings, performance notes, recommendations, concerns, approvals, everything. Do not summarize or shorten it. The merge decision needs your complete analysis.
+            **Security Concerns:** [Any security issues you identify]
+            
+            **Code Quality:** [Assessment of code quality, patterns, best practices]
+            
+            **Testing:** [Assessment of test coverage and quality]
+            
+            **Performance:** [Any performance considerations]
+            
+            **Recommendations:**
+            - [Your specific recommendations]
+            
+            ## Detailed Analysis
+            
+            [Provide your detailed analysis here - be thorough and specific]
+            
+            ## Final Recommendation
+            
+            [Your final recommendation: APPROVE, REQUEST_CHANGES, or COMMENT with clear reasoning]
+            
+            ---
+            
+            Be constructive and helpful in your feedback. Provide specific, actionable suggestions for improvement.
 
-          # Optional: Use sticky comments to make Claude reuse the same comment on subsequent pushes to the same PR
+          # Optional: Use sticky comments to make Claude reuse comment on subsequent pushes
           use_sticky_comment: true
+
+      - name: Capture Claude review content
+        if: always()  # Always run to capture review content
+        run: |
+          echo "📝 Capturing Claude review content for artifact..."
+          
+          # Create directory for this workflow run
+          RUN_DIR="/tmp/claude-review-${{ github.run_id }}-${{ github.run_attempt }}"
+          mkdir -p "$RUN_DIR"
+          
+          # Get the Claude review comment from the PR
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          
+          # Wait a moment for comment to be posted
+          sleep 10
+          
+          # Get Claude's most recent substantial comment on this PR
+          CLAUDE_REVIEW_CONTENT=$(gh pr view $PR_NUMBER \
+            --repo ${{ github.repository }} \
+            --json comments \
+            --jq '.comments[] | select(.author.login == "claude" and (.body | length > 100)) | .body' \
+            | tail -1)
+          
+          if [ -n "$CLAUDE_REVIEW_CONTENT" ] && [ "$CLAUDE_REVIEW_CONTENT" != "null" ]; then
+            echo "✅ Successfully captured Claude review content (${#CLAUDE_REVIEW_CONTENT} characters)"
+            
+            # Save the complete review to artifact file
+            echo "$CLAUDE_REVIEW_CONTENT" > "$RUN_DIR/claude-review-analysis.md"
+            
+            # Verify file was created successfully
+            if [ -f "$RUN_DIR/claude-review-analysis.md" ]; then
+              FILE_SIZE=$(wc -c < "$RUN_DIR/claude-review-analysis.md")
+              echo "📄 Review analysis file created: $FILE_SIZE bytes"
+              echo "📝 File preview:"
+              head -5 "$RUN_DIR/claude-review-analysis.md"
+            else
+              echo "❌ Failed to create review analysis file"
+            fi
+          else
+            echo "⚠️ No substantial Claude review comment found, creating placeholder"
+            echo "# Claude Code Review - No Content Captured" > "$RUN_DIR/claude-review-analysis.md"
+            echo "" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "⚠️ Claude review content was not successfully captured from the PR comments." >> "$RUN_DIR/claude-review-analysis.md"
+            echo "This could be due to:" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "- Review still in progress" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "- Comment not yet posted" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "- API timing issues" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "The merge decision workflow should use fallback methods to access the review content." >> "$RUN_DIR/claude-review-analysis.md"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload review analysis
         if: always()  # Upload even if review has issues
