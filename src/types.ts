@@ -1,5 +1,14 @@
-// Core types for gitplus MCP server
+/**
+ * Core TypeScript types for GitPlus MCP server
+ * 
+ * This file contains all type definitions used throughout the GitPlus codebase.
+ * Types are organized by functional area and include comprehensive documentation.
+ */
 
+/**
+ * Supported git hosting platforms
+ * GitPlus automatically detects the platform from remote URLs
+ */
 export enum Platform {
   Unknown = 'unknown',
   GitHub = 'github', 

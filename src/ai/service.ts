@@ -85,9 +85,9 @@ export interface ResolvedFile {
 }
 
 export class AIService {
-  private claudeCommand = process.env.GITPLUS_CLAUDE_COMMAND || '/Users/krysp/.nvm/versions/node/v23.9.0/bin/claude';
-  private defaultModel = process.env.GITPLUS_MODEL || 'sonnet';
-  private timeout = parseInt(process.env.GITPLUS_TIMEOUT || '120000'); // 120 seconds
+  private claudeCommand = process.env['GITPLUS_CLAUDE_COMMAND'] || 'claude';
+  private defaultModel = process.env['GITPLUS_MODEL'] || 'sonnet';
+  private timeout = parseInt(process.env['GITPLUS_TIMEOUT'] || '120000'); // 120 seconds
 
   /**
    * Execute Claude CLI command with proper error handling

@@ -611,7 +611,7 @@ export class ToolHandler {
       const now = new Date().toISOString();
       
       // Get package version
-      let version = '1.0.1';
+      let version = '1.0.3';
       try {
         const packageJson = require('../../package.json');
         version = packageJson.version;

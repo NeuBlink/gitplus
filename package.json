@@ -15,10 +15,13 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "clean": "rm -rf dist",
-    "lint": "echo 'Linting passed'",
+    "lint": "echo 'Linting passed - ESLint not configured'",
     "typecheck": "tsc --noEmit",
     "validate": "npm run typecheck && npm run test",
-    "prepublishOnly": "npm run clean && npm run build"
+    "prepublishOnly": "npm run clean && npm run build && chmod +x dist/main.js dist/cli.js dist/index.js",
+    "postbuild": "chmod +x dist/main.js dist/cli.js dist/index.js",
+    "mcp": "node dist/main.js --mcp",
+    "cli": "node dist/main.js"
   },
   "mcp": {
     "server": {
