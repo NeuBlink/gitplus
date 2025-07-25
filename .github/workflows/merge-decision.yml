@@ -788,51 +788,70 @@ jobs:
           echo "📋 Decision: $DECISION"
           echo "🔧 Method: $MERGE_METHOD"
           
-          # Try different merge approaches based on repository settings
-          echo "🔍 Checking repository merge settings..."
+          # Detailed error capture for debugging
+          echo "🔍 Checking repository and PR status..."
           
-          # First, try auto-merge (requires all checks to pass)
-          echo "🔄 Attempting auto-merge with $MERGE_METHOD method..."
-          if gh pr merge $PR_NUMBER --repo ${{ github.repository }} --$MERGE_METHOD --auto 2>/dev/null; then
+          # Check PR mergeable status first
+          PR_STATUS=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} --json mergeable,mergeStateStatus | jq -r '.mergeStateStatus')
+          echo "📋 PR merge state: $PR_STATUS"
+          
+          if [ "$PR_STATUS" != "CLEAN" ] && [ "$PR_STATUS" != "UNSTABLE" ]; then
+            echo "❌ PR is not in a mergeable state: $PR_STATUS"
+            gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
+              --body "⚠️ **Auto-merge Blocked**\\n\\n❌ **Issue**: PR merge state is '$PR_STATUS'\\n✅ **Decision**: $DECISION was approved\\n\\n**Resolution**: Ensure all required checks pass and conflicts are resolved, then try manual merge."
+            exit 0
+          fi
+          
+          # Try auto-merge first (GitHub's auto-merge feature)
+          echo "🔄 Attempting to enable auto-merge with $MERGE_METHOD method..."
+          AUTO_MERGE_OUTPUT=$(gh pr merge $PR_NUMBER --repo ${{ github.repository }} -$MERGE_METHOD --auto 2>&1) || AUTO_MERGE_FAILED=true
+          
+          if [ -z "$AUTO_MERGE_FAILED" ]; then
             echo "✅ Successfully enabled auto-merge for PR #$PR_NUMBER"
+            echo "📋 Auto-merge output: $AUTO_MERGE_OUTPUT"
             
             gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
-              --body "🤖 **Auto-merge enabled** by Claude AI\\n\\n✅ **Decision**: $DECISION\\n🚀 **Method**: $MERGE_METHOD\\n\\nThis PR will be automatically merged once all required status checks pass."
+              --body "🤖 **Auto-merge Enabled** by Claude AI\\n\\n✅ **Decision**: $DECISION\\n🚀 **Method**: $MERGE_METHOD\\n\\nThis PR will be automatically merged once all required status checks pass."
               
           else
-            echo "⚠️ Auto-merge not available, trying direct merge..."
+            echo "⚠️ Auto-merge failed: $AUTO_MERGE_OUTPUT"
+            echo "🔄 Attempting direct merge..."
             
-            # Try direct merge (immediate merge if all checks pass)
-            if gh pr merge $PR_NUMBER --repo ${{ github.repository }} --$MERGE_METHOD 2>/dev/null; then
+            # Try immediate merge
+            DIRECT_MERGE_OUTPUT=$(gh pr merge $PR_NUMBER --repo ${{ github.repository }} -$MERGE_METHOD 2>&1) || DIRECT_MERGE_FAILED=true
+            
+            if [ -z "$DIRECT_MERGE_FAILED" ]; then
               echo "✅ Successfully merged PR #$PR_NUMBER directly"
+              echo "📋 Direct merge output: $DIRECT_MERGE_OUTPUT"
               
               gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
-                --body "🤖 **PR Merged** by Claude AI\\n\\n✅ **Decision**: $DECISION\\n🚀 **Method**: $MERGE_METHOD\\n\\nThis PR has been automatically merged based on Claude's analysis."
+                --body "🤖 **PR Merged** by Claude AI\\n\\n✅ **Decision**: $DECISION\\n🚀 **Method**: $MERGE_METHOD\\n\\nThis PR has been automatically merged."
                 
             else
-              echo "⚠️ Standard merge failed, trying admin merge..."
+              echo "❌ Direct merge also failed: $DIRECT_MERGE_OUTPUT"
+              echo "📋 Analyzing failure reasons..."
               
-              # Try admin merge (bypass some restrictions)
-              if gh pr merge $PR_NUMBER --repo ${{ github.repository }} --$MERGE_METHOD --admin 2>/dev/null; then
-                echo "✅ Successfully merged PR #$PR_NUMBER with admin override"
-                
-                gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
-                  --body "🤖 **PR Merged** by Claude AI (admin override)\\n\\n✅ **Decision**: $DECISION\\n🚀 **Method**: $MERGE_METHOD\\n\\nThis PR required admin privileges to merge."
-                  
+              # Provide detailed failure analysis
+              if echo "$DIRECT_MERGE_OUTPUT" | grep -q "Resource not accessible"; then
+                echo "❌ Permission issue detected"
+                FAILURE_REASON="Insufficient workflow permissions for merging"
+              elif echo "$DIRECT_MERGE_OUTPUT" | grep -q "branch protection"; then
+                echo "❌ Branch protection rule violation"
+                FAILURE_REASON="Branch protection rules prevent automatic merging"
+              elif echo "$DIRECT_MERGE_OUTPUT" | grep -q "required status checks"; then
+                echo "❌ Required status checks not satisfied"
+                FAILURE_REASON="Required status checks have not passed"
               else
-                echo "❌ All merge attempts failed - manual intervention required"
-                echo "📋 Available options:"
-                echo "  1. Check branch protection rules"
-                echo "  2. Verify required status checks"
-                echo "  3. Ensure workflow has sufficient permissions"
-                echo "  4. Manual merge may be required"
-                
-                # Don't exit with error - set status for manual handling
-                gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
-                  --body "⚠️ **Auto-merge Failed** - Manual intervention required\\n\\n✅ **Decision**: $DECISION\\n❌ **Issue**: Insufficient permissions or branch protection\\n\\n**Next Steps:**\\n1. Check branch protection settings\\n2. Verify workflow permissions\\n3. Manual merge may be required"
-                
-                echo "auto_merge_failed=true" >> $GITHUB_OUTPUT
+                echo "❌ Unknown merge failure"
+                FAILURE_REASON="Unknown error during merge operation"
               fi
+              
+              gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
+                --body "⚠️ **Auto-merge Failed**\\n\\n✅ **Decision**: $DECISION (approved by Claude AI)\\n❌ **Issue**: $FAILURE_REASON\\n\\n**Error Details:**\\n\\\`\\\`\\\`\\n$DIRECT_MERGE_OUTPUT\\n\\\`\\\`\\\`\\n\\n**Manual Action Required**: Please merge this PR manually or review repository settings."
+              
+              # Set output but don't fail the workflow
+              echo "auto_merge_failed=true" >> $GITHUB_OUTPUT
+              echo "failure_reason=$FAILURE_REASON" >> $GITHUB_OUTPUT
             fi
           fi
         env:
