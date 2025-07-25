@@ -52,7 +52,7 @@ jobs:
             exit 1
           fi
           
-          if [[ ! "${HEAD_BRANCH}" =~ ^release-please-- ]]; then
+          if [[ ! "${HEAD_BRANCH}" =~ ^release-please--[a-zA-Z0-9._-]{1,50}$ ]]; then
             echo "❌ Error: PR head branch does not match release-please pattern"
             exit 1
           fi

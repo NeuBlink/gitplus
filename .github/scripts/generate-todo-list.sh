@@ -25,57 +25,70 @@ add_todo_item() {
 # Parse critical issues into individual TODO items
 if [ -n "$CRITICAL_ISSUES" ] && [ "$CRITICAL_ISSUES" != "[]" ] && [ "$CRITICAL_ISSUES" != "null" ]; then
     echo "🔍 Processing critical issues..."
-    echo "$CRITICAL_ISSUES" | jq -r '.[]?' 2>/dev/null | while read -r issue; do
+    # Use array to properly capture all issues (fixes subshell variable persistence)
+    readarray -t issues < <(echo "$CRITICAL_ISSUES" | jq -r '.[]?' 2>/dev/null)
+    for issue in "${issues[@]}"; do
         if [ -n "$issue" ] && [ "$issue" != "null" ]; then
             add_todo_item "- [ ] **Critical Issue**: $issue"
         fi
     done
 fi
 
-# Add specific TODO items based on rejection reason keywords
+# Add specific TODO items based on rejection reason keywords (optimized)
 echo "🔍 Analyzing rejection reason: $REASON"
 
-# Test-related issues
-if echo "$REASON" | grep -qi "test\|spec\|coverage"; then
-    add_todo_item "- [ ] **Tests**: Fix failing tests and ensure all test suites pass"
-    add_todo_item "- [ ] **Test Coverage**: Add missing test cases for new functionality"
-fi
+# Convert reason to lowercase once for efficient matching
+REASON_LOWER=$(echo "$REASON" | tr '[:upper:]' '[:lower:]')
 
-# Security-related issues
-if echo "$REASON" | grep -qi "security\|vulnerability\|cve"; then
-    add_todo_item "- [ ] **Security**: Address security vulnerabilities identified in scans"
-    add_todo_item "- [ ] **Dependencies**: Update vulnerable dependencies to secure versions"
-fi
+# Use single case statement for more efficient pattern matching
+case "$REASON_LOWER" in
+    *test*|*spec*|*coverage*)
+        add_todo_item "- [ ] **Tests**: Fix failing tests and ensure all test suites pass"
+        add_todo_item "- [ ] **Test Coverage**: Add missing test cases for new functionality"
+        ;;
+esac
 
-# Code review issues
-if echo "$REASON" | grep -qi "code.*review\|review.*request\|claude.*review"; then
-    add_todo_item "- [ ] **Code Review**: Address feedback from Claude's code review"
-    add_todo_item "- [ ] **Code Quality**: Improve code quality according to review recommendations"
-fi
+case "$REASON_LOWER" in
+    *security*|*vulnerability*|*cve*)
+        add_todo_item "- [ ] **Security**: Address security vulnerabilities identified in scans"
+        add_todo_item "- [ ] **Dependencies**: Update vulnerable dependencies to secure versions"
+        ;;
+esac
 
-# CI/Build issues
-if echo "$REASON" | grep -qi "build\|compile\|ci\|check"; then
-    add_todo_item "- [ ] **Build**: Fix build errors and compilation issues"
-    add_todo_item "- [ ] **CI Checks**: Ensure all CI/CD pipeline checks pass successfully"
-fi
+case "$REASON_LOWER" in
+    *code*review*|*review*request*|*claude*review*)
+        add_todo_item "- [ ] **Code Review**: Address feedback from Claude's code review"
+        add_todo_item "- [ ] **Code Quality**: Improve code quality according to review recommendations"
+        ;;
+esac
 
-# Linting/formatting issues
-if echo "$REASON" | grep -qi "lint\|format\|style"; then
-    add_todo_item "- [ ] **Code Style**: Fix linting errors and formatting issues"
-    add_todo_item "- [ ] **Standards**: Ensure code follows project style guidelines"
-fi
+case "$REASON_LOWER" in
+    *build*|*compile*|*ci*|*check*)
+        add_todo_item "- [ ] **Build**: Fix build errors and compilation issues"
+        add_todo_item "- [ ] **CI Checks**: Ensure all CI/CD pipeline checks pass successfully"
+        ;;
+esac
 
-# Documentation issues
-if echo "$REASON" | grep -qi "documentation\|docs\|readme"; then
-    add_todo_item "- [ ] **Documentation**: Update documentation for code changes"
-    add_todo_item "- [ ] **README**: Update README if new features were added"
-fi
+case "$REASON_LOWER" in
+    *lint*|*format*|*style*)
+        add_todo_item "- [ ] **Code Style**: Fix linting errors and formatting issues"
+        add_todo_item "- [ ] **Standards**: Ensure code follows project style guidelines"
+        ;;
+esac
 
-# Performance issues
-if echo "$REASON" | grep -qi "performance\|optimization\|slow"; then
-    add_todo_item "- [ ] **Performance**: Address performance concerns identified in review"
-    add_todo_item "- [ ] **Optimization**: Implement suggested optimizations"
-fi
+case "$REASON_LOWER" in
+    *documentation*|*docs*|*readme*)
+        add_todo_item "- [ ] **Documentation**: Update documentation for code changes"
+        add_todo_item "- [ ] **README**: Update README if new features were added"
+        ;;
+esac
+
+case "$REASON_LOWER" in
+    *performance*|*optimization*|*slow*)
+        add_todo_item "- [ ] **Performance**: Address performance concerns identified in review"
+        add_todo_item "- [ ] **Optimization**: Implement suggested optimizations"
+        ;;
+esac
 
 # Always add general improvement items
 add_todo_item "- [ ] **CI Checks**: Ensure all CI/CD checks pass successfully"

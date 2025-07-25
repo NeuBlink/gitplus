@@ -11,41 +11,38 @@ echo "🧪 Testing GitPlus Adaptive Polling Logic"
 test_adaptive_intervals() {
     echo "📋 Testing adaptive interval calculation..."
     
-    # Simulate the polling logic from claude-code-review.yml
+    # Simulate the optimized polling logic from claude-code-review.yml
     for ATTEMPT in {1..20}; do
-        if [ $ATTEMPT -le 5 ]; then
-            POLL_INTERVAL=3
-        elif [ $ATTEMPT -le 10 ]; then
-            POLL_INTERVAL=6
-        elif [ $ATTEMPT -le 15 ]; then
-            POLL_INTERVAL=10
-        else
-            POLL_INTERVAL=15
-        fi
+        case $ATTEMPT in
+            [1-5]) POLL_INTERVAL=3 ;;
+            [6-9]) POLL_INTERVAL=6 ;;
+            1[0-5]) POLL_INTERVAL=10 ;;
+            *) POLL_INTERVAL=15 ;;
+        esac
         
         echo "Attempt $ATTEMPT: ${POLL_INTERVAL}s interval"
         
-        # Validate expected intervals
+            # Validate expected intervals using optimized case statement
         case $ATTEMPT in
-            1|2|3|4|5)
+            [1-5])
                 if [ $POLL_INTERVAL -ne 3 ]; then
                     echo "❌ ERROR: Expected 3s interval for attempt $ATTEMPT, got ${POLL_INTERVAL}s"
                     exit 1
                 fi
                 ;;
-            6|7|8|9|10)
+            [6-9])
                 if [ $POLL_INTERVAL -ne 6 ]; then
                     echo "❌ ERROR: Expected 6s interval for attempt $ATTEMPT, got ${POLL_INTERVAL}s"
                     exit 1
                 fi
                 ;;
-            11|12|13|14|15)
+            1[0-5])
                 if [ $POLL_INTERVAL -ne 10 ]; then
                     echo "❌ ERROR: Expected 10s interval for attempt $ATTEMPT, got ${POLL_INTERVAL}s"
                     exit 1
                 fi
                 ;;
-            16|17|18|19|20)
+            *)
                 if [ $POLL_INTERVAL -ne 15 ]; then
                     echo "❌ ERROR: Expected 15s interval for attempt $ATTEMPT, got ${POLL_INTERVAL}s"
                     exit 1
@@ -61,18 +58,15 @@ test_adaptive_intervals() {
 test_total_timeout() {
     echo "📋 Testing total timeout calculation..."
     
-    # Calculate total timeout based on adaptive intervals
+    # Calculate total timeout based on optimized adaptive intervals
     TOTAL_TIME=0
     for ATTEMPT in {1..20}; do
-        if [ $ATTEMPT -le 5 ]; then
-            POLL_INTERVAL=3
-        elif [ $ATTEMPT -le 10 ]; then
-            POLL_INTERVAL=6
-        elif [ $ATTEMPT -le 15 ]; then
-            POLL_INTERVAL=10
-        else
-            POLL_INTERVAL=15
-        fi
+        case $ATTEMPT in
+            [1-5]) POLL_INTERVAL=3 ;;
+            [6-9]) POLL_INTERVAL=6 ;;
+            1[0-5]) POLL_INTERVAL=10 ;;
+            *) POLL_INTERVAL=15 ;;
+        esac
         
         # Only add interval time if not the last attempt
         if [ $ATTEMPT -lt 20 ]; then

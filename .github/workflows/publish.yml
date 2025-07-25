@@ -153,6 +153,21 @@ jobs:
         for i in $(seq 1 $MAX_ATTEMPTS); do
           if npm view @neublink/gitplus@latest version 2>/dev/null; then
             echo "✅ Package is available on NPM after $i attempts"
+            
+            # Calculate monitoring metrics
+            TOTAL_NPM_WAIT=0
+            for j in $(seq 1 $((i - 1))); do
+              WAIT_TIME=$((10 * (2 ** (j - 1))))
+              if [ $WAIT_TIME -gt 60 ]; then
+                WAIT_TIME=60
+              fi
+              TOTAL_NPM_WAIT=$((TOTAL_NPM_WAIT + WAIT_TIME))
+            done
+            
+            echo "📊 NPM Propagation Metrics:"
+            echo "  - Propagation attempts: $i/$MAX_ATTEMPTS"
+            echo "  - Total wait time: ${TOTAL_NPM_WAIT}s"
+            echo "  - Propagation speed: $([ $i -le 2 ] && echo "Fast" || [ $i -le 4 ] && echo "Normal" || echo "Slow")"
             break
           fi
           

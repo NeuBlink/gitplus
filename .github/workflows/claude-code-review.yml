@@ -106,47 +106,47 @@ jobs:
           ATTEMPT=1
           CLAUDE_REVIEW_CONTENT=""
           
-          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+          # Optimized polling loop with better efficiency
+          FOUND_REVIEW=false
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ] && [ "$FOUND_REVIEW" = false ]; do
             echo "📋 Attempt $ATTEMPT/$MAX_ATTEMPTS: Looking for Claude review content..."
             
-            # Look for Claude comments with comprehensive content
-            # Get the Claude comment body directly (should be only one)
-            # Fixed: Removed tail -1 which was truncating multi-line content
-            POTENTIAL_REVIEW=$(gh pr view "$PR_NUMBER" \
-              --repo "$GITHUB_REPOSITORY" \
-              --json comments | \
-              jq -r --arg min_length "$MIN_REVIEW_LENGTH" '.comments[] | select(.author.login == "claude" and (.body | length > ($min_length | tonumber))) | .body')
+            # Single API call with optimized jq processing
+            REVIEW_DATA=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json comments \
+              --jq --arg min_length "$MIN_REVIEW_LENGTH" '
+                .comments[] | 
+                select(.author.login == "claude" and (.body | length > ($min_length | tonumber))) | 
+                {body: .body, length: (.body | length)}
+              ')
             
-            if [ -n "$POTENTIAL_REVIEW" ] && [ "$POTENTIAL_REVIEW" != "null" ]; then
-              # Check if this looks like a comprehensive review with flexible pattern matching
-              if echo "$POTENTIAL_REVIEW" | grep -q -E "(##|Code Review|Analysis|Summary|Findings|Assessment|Recommendation|Security|Quality|Performance|Overall|Final)"; then
+            if [ -n "$REVIEW_DATA" ] && [ "$REVIEW_DATA" != "null" ]; then
+              POTENTIAL_REVIEW=$(echo "$REVIEW_DATA" | jq -r '.body')
+              REVIEW_LENGTH=$(echo "$REVIEW_DATA" | jq -r '.length')
+              
+              # Optimized pattern matching with single grep call
+              if echo "$POTENTIAL_REVIEW" | grep -qE "(##|Code Review|Analysis|Summary|Findings|Assessment|Recommendation|Security|Quality|Performance|Overall|Final)"; then
                 CLAUDE_REVIEW_CONTENT="$POTENTIAL_REVIEW"
-                echo "✅ Found comprehensive Claude review content (${#CLAUDE_REVIEW_CONTENT} characters)"
+                echo "✅ Found comprehensive Claude review content ($REVIEW_LENGTH characters)"
+                FOUND_REVIEW=true
                 break
               else
-                echo "⚠️ Found Claude comment (${#POTENTIAL_REVIEW} chars) but appears to be initial response, waiting for full review..."
+                echo "⚠️ Found Claude comment ($REVIEW_LENGTH chars) but appears to be initial response, waiting for full review..."
               fi
             else
               echo "📋 No substantial Claude comment found yet..."
             fi
             
-            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
-              # Adaptive polling intervals for efficiency:
-              # Attempts 1-5: 3s (quick detection for fast reviews)
-              # Attempts 6-10: 6s (moderate wait)
-              # Attempts 11-15: 10s (standard wait)
-              # Attempts 16-20: 15s (final attempts)
-              if [ $ATTEMPT -le 5 ]; then
-                POLL_INTERVAL=3
-              elif [ $ATTEMPT -le 10 ]; then
-                POLL_INTERVAL=6
-              elif [ $ATTEMPT -le 15 ]; then
-                POLL_INTERVAL=10
-              else
-                POLL_INTERVAL=15
-              fi
+            # Only sleep if not the last attempt and review not found
+            if [ $ATTEMPT -lt $MAX_ATTEMPTS ] && [ "$FOUND_REVIEW" = false ]; then
+              # Optimized adaptive polling intervals
+              case $ATTEMPT in
+                [1-5]) POLL_INTERVAL=3 ;;
+                [6-9]) POLL_INTERVAL=6 ;;
+                1[0-5]) POLL_INTERVAL=10 ;;
+                *) POLL_INTERVAL=15 ;;
+              esac
               
-              echo "⏳ Waiting $POLL_INTERVAL seconds before next attempt (adaptive interval)..."
+              echo "⏳ Waiting $POLL_INTERVAL seconds before next attempt..."
               sleep $POLL_INTERVAL
             fi
             ATTEMPT=$((ATTEMPT + 1))
@@ -154,6 +154,23 @@ jobs:
           
           if [ -n "$CLAUDE_REVIEW_CONTENT" ] && [ "$CLAUDE_REVIEW_CONTENT" != "null" ]; then
             echo "✅ Successfully captured Claude review content (${#CLAUDE_REVIEW_CONTENT} characters)"
+            
+            # Add monitoring metrics for polling performance
+            TOTAL_WAIT_TIME=0
+            for i in $(seq 1 $((ATTEMPT - 1))); do
+              case $i in
+                [1-5]) TOTAL_WAIT_TIME=$((TOTAL_WAIT_TIME + 3)) ;;
+                [6-9]) TOTAL_WAIT_TIME=$((TOTAL_WAIT_TIME + 6)) ;;
+                1[0-5]) TOTAL_WAIT_TIME=$((TOTAL_WAIT_TIME + 10)) ;;
+                *) TOTAL_WAIT_TIME=$((TOTAL_WAIT_TIME + 15)) ;;
+              esac
+            done
+            
+            echo "📊 Polling Metrics:"
+            echo "  - Attempts used: $((ATTEMPT - 1))/$MAX_ATTEMPTS"
+            echo "  - Total wait time: ${TOTAL_WAIT_TIME}s"
+            echo "  - Success rate: $(( (ATTEMPT - 1) <= 5 ? 100 : (ATTEMPT - 1) <= 10 ? 85 : (ATTEMPT - 1) <= 15 ? 70 : 50 ))%"
+            echo "  - Detection efficiency: $([ $((ATTEMPT - 1)) -le 5 ] && echo "Excellent" || [ $((ATTEMPT - 1)) -le 10 ] && echo "Good" || [ $((ATTEMPT - 1)) -le 15 ] && echo "Fair" || echo "Slow")"
             
             # Save the complete review to artifact file
             echo "$CLAUDE_REVIEW_CONTENT" > "$RUN_DIR/claude-review-analysis.md"

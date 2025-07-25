@@ -154,7 +154,7 @@ jobs:
           fi
           
           # Validate repository format
-          if ! [[ "$GITHUB_REPOSITORY" =~ ^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$ ]]; then
+          if ! [[ "$GITHUB_REPOSITORY" =~ ^[a-zA-Z0-9._-]{1,100}/[a-zA-Z0-9._-]{1,100}$ ]]; then
             echo "❌ ERROR: Invalid repository format: $GITHUB_REPOSITORY"
             exit 1
           fi
@@ -187,14 +187,14 @@ jobs:
           AUTHOR=$(echo "$PR_DATA" | jq -r '.author.login')
           HEAD_BRANCH=$(echo "$PR_DATA" | jq -r '.headRefName')
           IS_RELEASE_PLEASE="false"
-          if [[ "$AUTHOR" == "app/github-actions" ]] && [[ "$HEAD_BRANCH" == release-please--* ]]; then
+          if [[ "$AUTHOR" == "app/github-actions" ]] && [[ "$HEAD_BRANCH" =~ ^release-please--[a-zA-Z0-9._-]{1,50}$ ]]; then
             IS_RELEASE_PLEASE="true"
             echo "Detected Release Please PR"
           fi
           echo "IS_RELEASE_PLEASE=$IS_RELEASE_PLEASE" >> $GITHUB_OUTPUT
           
           # Validate HEAD SHA format
-          if ! [[ "$HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+          if ! [[ "$HEAD_SHA" =~ ^[a-f0-9]{40}$ ]] || [ ${#HEAD_SHA} -ne 40 ]; then
             echo "❌ ERROR: Invalid HEAD SHA format: $HEAD_SHA"
             exit 1
           fi
@@ -941,7 +941,7 @@ jobs:
           fi
           
           # Determine merge method
-          if [[ "$PR_AUTHOR" == "app/github-actions" ]] && [[ "$HEAD_BRANCH" == release-please--* ]]; then
+          if [[ "$PR_AUTHOR" == "app/github-actions" ]] && [[ "$HEAD_BRANCH" =~ ^release-please--[a-zA-Z0-9._-]{1,50}$ ]]; then
             echo "🔄 Release Please PR detected"
             echo "merge_method=squash" >> $GITHUB_OUTPUT
             echo "is_release=true" >> $GITHUB_OUTPUT
