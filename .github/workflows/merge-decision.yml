@@ -953,11 +953,11 @@ jobs:
           echo "📝 Reason: $REASON"
           
           # Create the comment body
-          COMMENT_BODY="👤 **Manual Approval Required**\\n\\n📋 **Reason**: $REASON\\n🔍 **Action**: Human review needed before merge\\n\\nGitPlus AI analysis determined this PR has good code quality but requires manual verification before merging.\\n\\n---\\n*🤖 This is an automated comment from github-actions bot that gets updated on new pushes*"
+          COMMENT_BODY="👤 **Manual Approval Required**\\n\\n📋 **Reason**: $REASON\\n🔍 **Action**: Human review needed before merge\\n\\nGitPlus AI analysis determined this PR has good code quality but requires manual verification before merging."
           
           # Check for existing manual approval comment and update it (sticky behavior)
           EXISTING_COMMENT_ID=$(gh api repos/${{ github.repository }}/issues/$PR_NUMBER/comments \
-            --jq '.[] | select(.body | contains("Manual Approval Required") and contains("automated comment that gets updated")) | .id' \
+            --jq '.[] | select(.body | contains("Manual Approval Required") and contains("GitPlus AI analysis determined")) | .id' \
             | head -1)
           
           if [ -n "$EXISTING_COMMENT_ID" ] && [ "$EXISTING_COMMENT_ID" != "null" ]; then
