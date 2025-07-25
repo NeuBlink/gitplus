@@ -1,6 +1,8 @@
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import { GitStatus, CommitInfo, Platform } from '../types';
+import { ProjectDetector, ProjectType } from '../utils/projectDetector';
+import { GitignoreManager } from '../utils/gitignoreManager';
 
 const execAsync = promisify(exec);
 
@@ -11,6 +13,8 @@ export interface GitCommandOptions {
 
 export class GitClient {
   private workingDirectory: string;
+  private lastFetchTime: number = 0;
+  private fetchCacheMs: number = 30000; // Cache fetch for 30 seconds
 
   constructor(workingDirectory: string = process.cwd()) {
     this.workingDirectory = workingDirectory;
@@ -19,7 +23,7 @@ export class GitClient {
   /**
    * Execute a git command and return the output
    */
-  private async executeGitCommand(
+  async executeGitCommand(
     command: string,
     options: GitCommandOptions = {}
   ): Promise<string> {
@@ -317,11 +321,115 @@ export class GitClient {
   }
 
   /**
-   * Stage files
+   * Stage files with smart detection and .gitignore management
    */
-  async add(files: string[] | 'all'): Promise<void> {
-    const command = files === 'all' ? 'add -A' : `add ${files.join(' ')}`;
-    await this.executeGitCommand(command);
+  async add(files: string[] | 'all', options: { smart?: boolean } = {}): Promise<void> {
+    const { smart = true } = options;
+
+    if (files !== 'all') {
+      // If specific files are provided, stage them directly
+      const command = `add ${files.join(' ')}`;
+      await this.executeGitCommand(command);
+      return;
+    }
+
+    if (!smart) {
+      // If smart staging is disabled, use the old behavior
+      await this.executeGitCommand('add -A');
+      return;
+    }
+
+    // Smart staging logic
+    await this.smartStageFiles();
+  }
+
+  /**
+   * Smart staging that auto-manages .gitignore and ignores build artifacts
+   */
+  private async smartStageFiles(): Promise<void> {
+    // 1. Detect project type
+    const detector = new ProjectDetector(this.workingDirectory);
+    const projectInfo = detector.detectProjectType();
+
+    // 2. Update .gitignore if needed
+    const gitignoreManager = new GitignoreManager(this.workingDirectory);
+    if (gitignoreManager.needsUpdate(projectInfo.primaryType, projectInfo.secondaryTypes)) {
+      const updateResult = gitignoreManager.updateGitignore(projectInfo.primaryType, projectInfo.secondaryTypes);
+      
+      if (updateResult.created || updateResult.updated) {
+        // Stage the updated .gitignore
+        await this.executeGitCommand('add .gitignore');
+      }
+    }
+
+    // 3. Get files to stage (exclude patterns)
+    const ignorePatterns = gitignoreManager.getIgnorePatternsForStaging(
+      projectInfo.primaryType,
+      projectInfo.secondaryTypes
+    );
+
+    // 4. Get current repository status
+    const status = await this.getStatus();
+    const filesToStage = [
+      ...status.unstaged,
+      ...status.untracked
+    ];
+
+    // 5. Filter out files that should be ignored
+    const smartFilesToStage = filesToStage.filter(file => 
+      !this.shouldIgnoreFile(file, ignorePatterns)
+    );
+
+    // 6. Stage the filtered files
+    if (smartFilesToStage.length > 0) {
+      // Stage files in batches to avoid command line length limits
+      const batchSize = 50;
+      for (let i = 0; i < smartFilesToStage.length; i += batchSize) {
+        const batch = smartFilesToStage.slice(i, i + batchSize);
+        const escapedFiles = batch.map(file => `"${file}"`).join(' ');
+        await this.executeGitCommand(`add ${escapedFiles}`);
+      }
+    }
+  }
+
+  /**
+   * Check if a file should be ignored based on patterns
+   */
+  private shouldIgnoreFile(filePath: string, ignorePatterns: string[]): boolean {
+    for (const pattern of ignorePatterns) {
+      if (this.matchesPattern(filePath, pattern)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Check if a file path matches a gitignore pattern
+   */
+  private matchesPattern(filePath: string, pattern: string): boolean {
+    // Normalize the file path
+    const normalizedPath = filePath.replace(/^\.\//, '');
+    const normalizedPattern = pattern.replace(/^\.\//, '');
+
+    // Handle directory patterns
+    if (normalizedPattern.endsWith('/')) {
+      const dirPattern = normalizedPattern.slice(0, -1);
+      return normalizedPath.startsWith(dirPattern + '/') || normalizedPath === dirPattern;
+    }
+
+    // Convert gitignore pattern to regex
+    let regexPattern = normalizedPattern
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&') // Escape special regex chars
+      .replace(/\\\*\\\*/g, '.*') // ** matches any path
+      .replace(/\\\*/g, '[^/]*') // * matches anything except /
+      .replace(/\\\?/g, '[^/]'); // ? matches single char except /
+
+    // Check for exact match or path match
+    const exactRegex = new RegExp(`^${regexPattern}$`);
+    const pathRegex = new RegExp(`(^|/)${regexPattern}(/|$)`);
+
+    return exactRegex.test(normalizedPath) || pathRegex.test(normalizedPath);
   }
 
   /**
@@ -391,6 +499,30 @@ export class GitClient {
   }
 
   /**
+   * Ensure repository is up-to-date by fetching if needed
+   */
+  async ensureUpToDate(force: boolean = false): Promise<void> {
+    const now = Date.now();
+    
+    // Skip if we fetched recently and not forced
+    if (!force && (now - this.lastFetchTime) < this.fetchCacheMs) {
+      return;
+    }
+
+    try {
+      // Check if we have a remote before fetching
+      const remoteURL = await this.getRemoteURL();
+      if (remoteURL) {
+        await this.fetch({ prune: true });
+        this.lastFetchTime = now;
+      }
+    } catch (error) {
+      // Don't fail if fetch fails - might be offline or no remote
+      console.debug('Auto-fetch failed, continuing without fetch:', error);
+    }
+  }
+
+  /**
    * Fetch updates from remote repository
    */
   async fetch(options: {
@@ -415,7 +547,9 @@ export class GitClient {
       command += ' --prune';
     }
     
-    return await this.executeGitCommand(command);
+    const result = await this.executeGitCommand(command);
+    this.lastFetchTime = Date.now(); // Update fetch time
+    return result;
   }
 
   /**

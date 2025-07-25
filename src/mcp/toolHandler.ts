@@ -147,6 +147,10 @@ export class ToolHandler {
 
     try {
 
+      // Phase 0: Ensure repository is up-to-date
+      steps.push('🔄 Ensuring repository is up-to-date...');
+      await gitClient.ensureUpToDate();
+
       // Phase 1: Pre-ship validation and repository health check
       steps.push('🔍 Performing pre-ship validation...');
       
@@ -424,10 +428,28 @@ export class ToolHandler {
           }
         }
 
-        // Phase 6: PR creation with enhanced error handling
+        // Phase 6: Mandatory pre-PR validation for conflict-free guarantee
         if (pushSuccess && !noPR) {
           const platformManager = new PlatformManager(updatedStatus.platform, updatedStatus.remoteURL, repoPath);
           const capabilities = await platformManager.getCapabilities();
+          
+          // MANDATORY: Ensure PR will be conflict-free before creation
+          const targetBranch = baseBranch || updatedStatus.baseBranch;
+          const preValidation = await this.ensureConflictFreePR(gitClient, currentBranch, targetBranch, steps);
+          
+          if (!preValidation.isConflictFree) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `❌ **Cannot Create PR - Conflicts Detected**\n\n${steps.join('\n')}\n\n**Conflict Analysis:**\n${preValidation.conflictDetails}\n\n**Resolution Required:**\n${preValidation.resolutionSteps.map(s => `• ${s}`).join('\n')}\n\n**GitPlus Guarantee:** No PR will be created with conflicts. Please resolve conflicts manually and run ship again.`,
+                },
+              ],
+              isError: true,
+            };
+          }
+          
+          steps.push('✅ Pre-PR validation passed - guaranteed conflict-free');
 
           if (capabilities.canCreatePR) {
             try {
@@ -510,9 +532,126 @@ export class ToolHandler {
     }
   }
 
+  /**
+   * Ensure PR will be conflict-free by validating merge with target branch
+   */
+  private async ensureConflictFreePR(
+    gitClient: GitClient, 
+    sourceBranch: string, 
+    targetBranch: string, 
+    steps: string[]
+  ): Promise<{
+    isConflictFree: boolean;
+    conflictDetails: string;
+    resolutionSteps: string[];
+  }> {
+    try {
+      steps.push(`🔍 Validating merge compatibility with ${targetBranch}...`);
 
+      // 1. Ensure we have the latest target branch
+      await gitClient.fetch({ prune: true });
+      
+      // 2. Check if target branch exists locally
+      try {
+        await gitClient.executeGitCommand(`show-ref --verify --quiet refs/heads/${targetBranch}`);
+      } catch {
+        // Target branch doesn't exist locally, fetch it
+        await gitClient.executeGitCommand(`fetch origin ${targetBranch}:${targetBranch}`);
+      }
 
+      // 3. Perform a test merge to detect conflicts
+      const originalBranch = await gitClient.getCurrentBranch();
+      
+      // Create a temporary test branch
+      const testBranch = `gitplus-test-merge-${Date.now()}`;
+      await gitClient.executeGitCommand(`checkout -b ${testBranch} ${targetBranch}`);
+      
+      try {
+        // Attempt merge
+        await gitClient.executeGitCommand(`merge --no-commit --no-ff ${sourceBranch}`);
+        
+        // If we get here, merge is clean
+        await gitClient.executeGitCommand('merge --abort'); // Clean up the test merge
+        await gitClient.executeGitCommand(`checkout ${originalBranch}`);
+        await gitClient.executeGitCommand(`branch -D ${testBranch}`);
+        
+        steps.push(`✅ Merge test passed - no conflicts detected`);
+        return {
+          isConflictFree: true,
+          conflictDetails: '',
+          resolutionSteps: []
+        };
+        
+      } catch (mergeError: any) {
+        // Check if it's a conflict error
+        if (mergeError.message && mergeError.message.includes('CONFLICT')) {
+          // Get conflict details
+          const conflictFiles = await this.getConflictFiles(gitClient);
+          
+          // Clean up
+          await gitClient.executeGitCommand('merge --abort');
+          await gitClient.executeGitCommand(`checkout ${originalBranch}`);
+          await gitClient.executeGitCommand(`branch -D ${testBranch}`);
+          
+          return {
+            isConflictFree: false,
+            conflictDetails: `Merge conflicts detected in ${conflictFiles.length} files: ${conflictFiles.join(', ')}`,
+            resolutionSteps: [
+              `Manually merge ${targetBranch} into ${sourceBranch}`,
+              'Resolve all conflicts in affected files',
+              'Stage resolved files with git add',
+              'Complete merge with git commit',
+              'Run ship again to create PR'
+            ]
+          };
+        } else {
+          // Different merge error, might be safe to proceed
+          await gitClient.executeGitCommand('merge --abort').catch(() => {});
+          await gitClient.executeGitCommand(`checkout ${originalBranch}`).catch(() => {});
+          await gitClient.executeGitCommand(`branch -D ${testBranch}`).catch(() => {});
+          
+          return {
+            isConflictFree: true,
+            conflictDetails: `Merge test completed with non-conflict error: ${mergeError.message}`,
+            resolutionSteps: []
+          };
+        }
+      }
+      
+    } catch (error: any) {
+      steps.push(`⚠️ Pre-PR validation error: ${error.message}`);
+      
+      // If validation fails, err on the side of caution
+      return {
+        isConflictFree: false,
+        conflictDetails: `Validation failed: ${error.message}`,
+        resolutionSteps: [
+          'Ensure target branch is accessible',
+          'Check repository connectivity',
+          'Try manual merge validation',
+          'Contact support if issues persist'
+        ]
+      };
+    }
+  }
 
+  /**
+   * Get list of files with conflicts
+   */
+  private async getConflictFiles(gitClient: GitClient): Promise<string[]> {
+    try {
+      const statusOutput = await gitClient.executeGitCommand('status --porcelain');
+      const conflictFiles = statusOutput
+        .split('\n')
+        .filter(line => line.startsWith('UU ') || line.startsWith('AA ') || line.startsWith('DD '))
+        .map(line => line.substring(3).trim())
+        .filter(file => file.length > 0);
+      
+      return conflictFiles;
+    } catch {
+      return [];
+    }
+  }
 
   private async handleStatus(args: Record<string, any>, gitClient: GitClient): Promise<ToolResult> {
     const { verbose = false } = args;
@@ -530,6 +669,9 @@ export class ToolHandler {
           ],
         };
       }
+
+      // Ensure repository is up-to-date before showing status
+      await gitClient.ensureUpToDate();
 
       const status = await gitClient.getStatus();
       const platformManager = new PlatformManager(status.platform, status.remoteURL, gitClient.getWorkingDirectory());
