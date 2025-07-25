@@ -148,7 +148,12 @@ jobs:
           
           # Add and commit the updated package-lock.json
           git add package-lock.json
-          git commit -m "chore: update package-lock.json for version \${NEW_VERSION}\n\n- Updated package-lock.json to match package.json version \${NEW_VERSION}\n- This ensures consistent dependency resolution across environments\n\nCo-authored-by: release-please[bot] <55107282+release-please[bot]@users.noreply.github.com>"
+          git commit -m "chore: update package-lock.json for version ${NEW_VERSION}
+
+- Updated package-lock.json to match package.json version ${NEW_VERSION}
+- This ensures consistent dependency resolution across environments
+
+Co-authored-by: release-please[bot] <55107282+release-please[bot]@users.noreply.github.com>"
           
           # Push the changes back to the Release Please branch using safe reference
           git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${HEAD_BRANCH}"
@@ -167,7 +172,7 @@ jobs:
         run: |
           gh pr comment "${PR_NUMBER}" \
             --repo "${GITHUB_REPOSITORY}" \
-            --body "🤖 **Package Lock Updated**\\n\\n📦 **Version Change**: \${OLD_VERSION} → \${NEW_VERSION}\\n🔄 **Action**: Updated \\\`package-lock.json\\\` to match new version\\n✅ **Status**: Automatically committed to this Release Please PR\\n\\nThe package lock file has been updated to ensure consistent dependency resolution with the new version."
+            --body "🤖 **Package Lock Updated**\\n\\n📦 **Version Change**: ${OLD_VERSION} → ${NEW_VERSION}\\n🔄 **Action**: Updated \\\`package-lock.json\\\` to match new version\\n✅ **Status**: Automatically committed to this Release Please PR\\n\\nThe package lock file has been updated to ensure consistent dependency resolution with the new version."
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}

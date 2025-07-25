@@ -149,13 +149,24 @@ jobs:
     - name: Wait for NPM propagation
       run: |
         echo "Waiting for NPM package propagation..."
-        for i in {1..6}; do
+        MAX_ATTEMPTS=6
+        for i in $(seq 1 $MAX_ATTEMPTS); do
           if npm view @neublink/gitplus@latest version 2>/dev/null; then
-            echo "Package is available on NPM"
+            echo "✅ Package is available on NPM after $i attempts"
             break
           fi
-          echo "Attempt $i: Package not yet available, waiting 30 seconds..."
-          sleep 30
+          
+          if [ $i -lt $MAX_ATTEMPTS ]; then
+            # Exponential backoff: 10, 20, 40, 60, 60 seconds (capped at 60s)
+            WAIT_TIME=$((10 * (2 ** (i - 1))))
+            if [ $WAIT_TIME -gt 60 ]; then
+              WAIT_TIME=60
+            fi
+            echo "Attempt $i: Package not yet available, waiting ${WAIT_TIME} seconds..."
+            sleep $WAIT_TIME
+          else
+            echo "⚠️ Package may not be fully propagated after $MAX_ATTEMPTS attempts"
+          fi
         done
       
     - name: Test NPM installation
