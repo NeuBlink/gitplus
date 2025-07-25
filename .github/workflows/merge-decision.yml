@@ -165,6 +165,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Make merge decision
         id: merge-decision
         uses: anthropics/claude-code-action@e26577a930883943cf9d90885cd1e8da510078dd # beta
