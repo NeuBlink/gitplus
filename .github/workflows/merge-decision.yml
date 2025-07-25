@@ -562,11 +562,26 @@ jobs:
 
       - name: Prepare decision environment
         run: |
-          # Ensure /tmp is writable and create decision template
+          # Ensure /tmp is writable and create decision directory for AI
           sudo chmod 777 /tmp
+          
+          # Create the specific directory that the AI will write to
+          MERGE_RUN_DIR="/tmp/merge-decision-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$MERGE_RUN_DIR"
+          chmod 777 "$MERGE_RUN_DIR"
+          
+          echo "📁 Created decision directory: $MERGE_RUN_DIR"
+          echo "🔍 Directory permissions:"
+          ls -la "$MERGE_RUN_DIR/" || echo "Directory is empty (expected)"
+          
+          # Create a default decision template for fallback
           echo '{"decision": "PENDING", "reason": "Analysis in progress", "critical_issues": [], "recommended_action": "manual-review"}' > /tmp/merge-decision.json
           chmod 666 /tmp/merge-decision.json
+          
           echo "✅ Decision environment prepared"
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
 
       - name: Make merge decision (Release Please)
         id: release-decision
@@ -710,27 +725,61 @@ jobs:
             }
             ```
             
-            **Write decision to file:**
+            **IMPORTANT: Write your decision to this exact file path:**
             ```bash
-            echo 'YOUR_JSON' > /tmp/merge-decision-${{ github.run_id }}-${{ github.run_attempt }}/merge-decision.json
+            echo 'YOUR_JSON_HERE' > /tmp/merge-decision-${{ github.run_id }}-${{ github.run_attempt }}/merge-decision.json
             ```
+            
+            **Example:**
+            ```bash
+            echo '{"decision": "APPROVE", "reason": "All checks pass, code quality good", "critical_issues": [], "recommended_action": "auto-merge"}' > /tmp/merge-decision-${{ github.run_id }}-${{ github.run_attempt }}/merge-decision.json
+            ```
+            
+            The directory `/tmp/merge-decision-${{ github.run_id }}-${{ github.run_attempt }}/` already exists and has write permissions.
 
       - name: Parse merge decision
         id: parse-decision
         run: |
           echo "📋 Parsing merge decision..."
           
+          # Debug: Show environment info
+          echo "🔍 Environment:"
+          echo "  GITHUB_RUN_ID: $GITHUB_RUN_ID"
+          echo "  GITHUB_RUN_ATTEMPT: $GITHUB_RUN_ATTEMPT"
+          echo "  IS_RELEASE_PLEASE: $IS_RELEASE_PLEASE"
+          
           # First, try to read from the decision file (works for both Release Please and Regular PRs)
           MERGE_RUN_DIR="/tmp/merge-decision-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           DECISION_FILE="$MERGE_RUN_DIR/merge-decision.json"
           DECISION_JSON=""
           
+          echo "📁 Looking for decision file at: $DECISION_FILE"
+          echo "🔍 Directory contents:"
+          ls -la "$MERGE_RUN_DIR/" 2>/dev/null || echo "Directory does not exist or is empty"
+          
           if [ -f "$DECISION_FILE" ]; then
             echo "✅ Found decision file at: $DECISION_FILE"
+            FILE_SIZE=$(wc -c < "$DECISION_FILE" 2>/dev/null || echo "0")
+            echo "📄 File size: $FILE_SIZE bytes"
             DECISION_JSON=$(cat "$DECISION_FILE")
             echo "📄 Decision from file: $DECISION_JSON"
+            
+            # Validate JSON structure
+            if echo "$DECISION_JSON" | jq empty 2>/dev/null; then
+              echo "✅ Valid JSON structure"
+            else
+              echo "❌ Invalid JSON structure, will attempt to fix"
+              # Try to extract JSON from potential markdown code blocks
+              DECISION_JSON=$(echo "$DECISION_JSON" | sed -n '/```json/,/```/p' | sed '1d;$d' | tr -d '\n' | head -1)
+              if [ -z "$DECISION_JSON" ]; then
+                DECISION_JSON=$(echo "$DECISION_JSON" | grep -o '{[^}]*"decision"[^}]*}' | head -1)
+              fi
+            fi
           elif [ "$IS_RELEASE_PLEASE" = "true" ]; then
             echo "❌ Release Please PR but no decision file found - this should not happen"
+            echo "🔍 Expected file: $DECISION_FILE"
+            echo "🔍 Directory listing:"
+            find /tmp -name "*merge-decision*" -type f 2>/dev/null || echo "No merge-decision files found"
             exit 1
           else
             echo "⚠️ No decision file found, falling back to comment parsing for regular PR..."
