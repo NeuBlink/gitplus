@@ -175,8 +175,12 @@ jobs:
           VALIDATE_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "validate-pr") | .state' | head -1)
           VALIDATE_RESULT=${VALIDATE_RESULT:-"PENDING"}
           
-          # Get complete Claude review content from artifact file (preferred method)
-          if [ "$CLAUDE_RESULT" = "SUCCESS" ]; then
+          # Handle Claude review content - skip for Release Please PRs
+          if [ "$IS_RELEASE_PLEASE" = "true" ]; then
+            echo "🤖 Release Please PR detected - skipping Claude review requirement"
+            echo "CLAUDE_REVIEW_CONTENT=Release Please PR: Claude review bypassed for automated release" >> $GITHUB_OUTPUT
+            CLAUDE_RESULT="SKIPPED_RELEASE"
+          elif [ "$CLAUDE_RESULT" = "SUCCESS" ]; then
             echo "🔍 Loading Claude review from artifact file..."
             
             # Check if download step found the analysis file
@@ -240,8 +244,79 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Validate Release Please PR security
+        id: validate-release
+        if: steps.pr-context.outputs.IS_RELEASE_PLEASE == 'true'
+        run: |
+          echo "🔒 Validating Release Please PR security..."
+          PR_NUMBER=${{ steps.pr-context.outputs.PR_NUMBER }}
+          
+          # Security validation: Strict author verification
+          AUTHOR="${{ steps.pr-context.outputs.PR_AUTHOR }}"
+          HEAD_BRANCH="${{ steps.pr-context.outputs.HEAD_BRANCH }}"
+          
+          if [ "$AUTHOR" != "app/github-actions" ]; then
+            echo "❌ SECURITY VIOLATION: Invalid Release Please author: $AUTHOR"
+            echo "release_validation_passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          if [[ ! "$HEAD_BRANCH" =~ ^release-please--branches--main--components-- ]]; then
+            echo "❌ SECURITY VIOLATION: Invalid Release Please branch pattern: $HEAD_BRANCH"
+            echo "release_validation_passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Validate file changes - only allow safe release files
+          echo "🔍 Validating changed files..."
+          CHANGED_FILES=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} --json files --jq '.files[].path')
+          
+          ALLOWED_FILES=(
+            "package.json"
+            "package-lock.json" 
+            "CHANGELOG.md"
+            "VERSION"
+            "version.txt"
+            ".release-please-manifest.json"
+          )
+          
+          VALIDATION_PASSED=true
+          while IFS= read -r file; do
+            if [ -n "$file" ]; then
+              echo "  Checking file: $file"
+              
+              # Check if file is in allowed list
+              FILE_ALLOWED=false
+              for allowed_file in "${ALLOWED_FILES[@]}"; do
+                if [ "$file" = "$allowed_file" ]; then
+                  FILE_ALLOWED=true
+                  break
+                fi
+              done
+              
+              if [ "$FILE_ALLOWED" = "false" ]; then
+                echo "❌ SECURITY VIOLATION: Unauthorized file change in Release Please PR: $file"
+                VALIDATION_PASSED=false
+              else
+                echo "  ✅ Authorized file: $file"
+              fi
+            fi
+          done <<< "$CHANGED_FILES"
+          
+          if [ "$VALIDATION_PASSED" = "true" ]; then
+            echo "✅ Release Please PR validation passed"
+            echo "release_validation_passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Release Please PR validation failed"
+            echo "release_validation_passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Download Claude review analysis
         id: download-review
+        if: steps.pr-context.outputs.IS_RELEASE_PLEASE != 'true'
         run: |
           # Create unique directory for this merge decision run
           MERGE_RUN_DIR="/tmp/merge-decision-${{ github.run_id }}-${{ github.run_attempt }}"
@@ -285,8 +360,95 @@ jobs:
           chmod 666 /tmp/merge-decision.json
           echo "✅ Decision environment prepared"
 
-      - name: Make merge decision
+      - name: Make merge decision (Release Please)
+        id: release-decision
+        if: steps.pr-context.outputs.IS_RELEASE_PLEASE == 'true' && steps.validate-release.outputs.release_validation_passed == 'true'
+        run: |
+          echo "🤖 Making automated decision for Release Please PR..."
+          
+          # Check CI status for Release Please PR
+          TEST_STATUS="${{ steps.pr-context.outputs.TEST_CONCLUSION }}"
+          SECURITY_STATUS="${{ steps.pr-context.outputs.SECURITY_CONCLUSION }}"
+          VALIDATE_STATUS="${{ steps.pr-context.outputs.VALIDATE_CONCLUSION }}"
+          
+          echo "📊 CI Status Check:"
+          echo "  Tests: $TEST_STATUS"
+          echo "  Security: $SECURITY_STATUS" 
+          echo "  Validation: $VALIDATE_STATUS"
+          
+          # Decision logic for Release Please PR
+          DECISION="APPROVE"
+          CRITICAL_ISSUES=()
+          
+          if [ "$TEST_STATUS" = "FAILURE" ]; then
+            DECISION="REJECT"
+            CRITICAL_ISSUES+=("Tests failing")
+          fi
+          
+          if [ "$SECURITY_STATUS" = "FAILURE" ]; then
+            DECISION="REJECT" 
+            CRITICAL_ISSUES+=("Security checks failing")
+          fi
+          
+          if [ "$VALIDATE_STATUS" = "FAILURE" ]; then
+            DECISION="REJECT"
+            CRITICAL_ISSUES+=("PR validation failing")
+          fi
+          
+          # Create decision JSON
+          CRITICAL_ISSUES_JSON=$(printf '%s\n' "${CRITICAL_ISSUES[@]}" | jq -R . | jq -s .)
+          
+          if [ "$DECISION" = "APPROVE" ]; then
+            REASON="Release Please PR with all CI checks passing"
+            RECOMMENDED_ACTION="auto-merge"
+          else
+            REASON="Release Please PR with failing CI checks: $(IFS=', '; echo "${CRITICAL_ISSUES[*]}")"
+            RECOMMENDED_ACTION="fix-issues"
+          fi
+          
+          # Create decision file
+          MERGE_RUN_DIR="/tmp/merge-decision-${{ github.run_id }}-${{ github.run_attempt }}"
+          mkdir -p "$MERGE_RUN_DIR"
+          
+          cat > "$MERGE_RUN_DIR/merge-decision.json" << EOF
+          {
+            "decision": "$DECISION",
+            "reason": "$REASON",
+            "critical_issues": $CRITICAL_ISSUES_JSON,
+            "recommended_action": "$RECOMMENDED_ACTION"
+          }
+          EOF
+          
+          echo "✅ Release Please decision created: $DECISION"
+          echo "📝 Reason: $REASON"
+          
+          # Add PR comment
+          gh pr comment ${{ steps.pr-context.outputs.PR_NUMBER }} \
+            --repo ${{ github.repository }} \
+            --body "🤖 **Automated Release Decision**
+
+          **Decision**: $DECISION  
+          **Type**: Release Please PR  
+          **Reason**: $REASON  
+          **Action**: $RECOMMENDED_ACTION  
+          
+          **Security Validation**: ✅ Passed
+          - Author verified: app/github-actions
+          - Branch pattern verified: release-please--*
+          - File changes validated: Only safe release files
+          
+          **CI Status**: 
+          - Tests: $TEST_STATUS
+          - Security: $SECURITY_STATUS  
+          - Validation: $VALIDATE_STATUS
+          
+          This automated decision was made without Claude review as this is a validated Release Please PR."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Make merge decision (Regular PR)
         id: merge-decision
+        if: steps.pr-context.outputs.IS_RELEASE_PLEASE != 'true'
         uses: anthropics/claude-code-action@e26577a930883943cf9d90885cd1e8da510078dd # beta
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -365,9 +527,9 @@ jobs:
       - name: Parse merge decision
         id: parse-decision
         run: |
-          echo "📋 Parsing Claude's merge decision..."
+          echo "📋 Parsing merge decision..."
           
-          # First, try to read from the decision file that Claude should have created
+          # First, try to read from the decision file (works for both Release Please and Regular PRs)
           MERGE_RUN_DIR="/tmp/merge-decision-${{ github.run_id }}-${{ github.run_attempt }}"
           DECISION_FILE="$MERGE_RUN_DIR/merge-decision.json"
           DECISION_JSON=""
@@ -376,8 +538,11 @@ jobs:
             echo "✅ Found decision file at: $DECISION_FILE"
             DECISION_JSON=$(cat "$DECISION_FILE")
             echo "📄 Decision from file: $DECISION_JSON"
+          elif [ "${{ steps.pr-context.outputs.IS_RELEASE_PLEASE }}" = "true" ]; then
+            echo "❌ Release Please PR but no decision file found - this should not happen"
+            exit 1
           else
-            echo "⚠️ No decision file found, falling back to comment parsing..."
+            echo "⚠️ No decision file found, falling back to comment parsing for regular PR..."
             
             # Fallback: Get Claude comment with better filtering
             CLAUDE_DECISION_COMMENT=$(gh pr view ${{ steps.pr-context.outputs.PR_NUMBER }} \
