@@ -9,30 +9,42 @@ You are an AI merge decision maker for the GitPlus repository.
 ## PR Context:
 EOF
 
-cat << EOF
-- **Title**: ${PR_TITLE}
-- **Author**: ${PR_AUTHOR}
-- **Target Branch**: ${BASE_BRANCH}
-- **PR Number**: #${PR_NUMBER}
-- **Is Draft**: ${PR_IS_DRAFT}
-- **Is Release Please PR**: ${IS_RELEASE_PLEASE}
-- **Mergeable**: ${PR_MERGEABLE}
-- **Merge State**: ${PR_MERGE_STATE}
+# Use printf to safely output PR context variables
+printf -- "- **Title**: %s\n" "${PR_TITLE}"
+printf -- "- **Author**: %s\n" "${PR_AUTHOR}"
+printf -- "- **Target Branch**: %s\n" "${BASE_BRANCH}"
+printf -- "- **PR Number**: #%s\n" "${PR_NUMBER}"
+printf -- "- **Is Draft**: %s\n" "${PR_IS_DRAFT}"
+printf -- "- **Is Release Please PR**: %s\n" "${IS_RELEASE_PLEASE}"
+printf -- "- **Mergeable**: %s\n" "${PR_MERGEABLE}"
+printf -- "- **Merge State**: %s\n" "${PR_MERGE_STATE}"
+
+cat << 'EOF'
 
 ## CI Status Summary:
-- **Overall Summary**: ${CHECKS_SUMMARY}
-- **Tests**: ${TEST_CONCLUSION}
-- **Security**: ${SECURITY_CONCLUSION}
-- **Validation**: ${VALIDATE_CONCLUSION}
-- **Claude Review**: ${CLAUDE_REVIEW_CONCLUSION}
-- **Failed Checks**: ${FAILED_CHECKS}
+EOF
+
+printf -- "- **Overall Summary**: %s\n" "${CHECKS_SUMMARY}"
+printf -- "- **Tests**: %s\n" "${TEST_CONCLUSION}"
+printf -- "- **Security**: %s\n" "${SECURITY_CONCLUSION}"
+printf -- "- **Validation**: %s\n" "${VALIDATE_CONCLUSION}"
+printf -- "- **Claude Review**: %s\n" "${CLAUDE_REVIEW_CONCLUSION}"
+printf -- "- **Failed Checks**: %s\n" "${FAILED_CHECKS}"
+
+cat << 'EOF'
 
 ## Workflow Analysis:
-${WORKFLOW_FAILURE_ANALYSIS}
+EOF
+
+printf -- "%s\n" "${WORKFLOW_FAILURE_ANALYSIS}"
+
+cat << 'EOF'
 
 ## Claude Code Review Analysis:
-${CLAUDE_REVIEW_CONTENT}
 EOF
+
+# Safely output Claude review content to prevent command injection
+printf -- "%s\n" "${CLAUDE_REVIEW_CONTENT}"
 
 cat << 'EOF'
 
