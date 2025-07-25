@@ -130,6 +130,14 @@ program
       }
 
       // Create commit
+      // Validate commit message before committing
+      const commitAnalyzer = new ChangeAnalyzer(gitClient);
+      const validation = await commitAnalyzer.validateCommitMessage(commitMessage);
+      if (!validation.valid) {
+        console.error(`❌ Commit Message Validation Failed:\n${validation.errors.map((e: string) => `  • ${e}`).join('\n')}\n\nMessage: "${commitMessage}"\n\nGitPlus enforces conventional commit standards to match CI validation.`);
+        process.exit(1);
+      }
+      
       await gitClient.commit(commitMessage);
       output(`✅ Commit created: ${commitMessage}`);
 
@@ -245,6 +253,14 @@ program
 
       // Phase 3: Create commit
       const commitMessage = options.message || analysis.commitMessage;
+      
+      // Validate commit message before committing
+      const validation = await analyzer.validateCommitMessage(commitMessage);
+      if (!validation.valid) {
+        console.error(`❌ Commit Message Validation Failed:\n${validation.errors.map((e: string) => `  • ${e}`).join('\n')}\n\nMessage: "${commitMessage}"\n\nGitPlus enforces conventional commit standards to match CI validation.`);
+        process.exit(1);
+      }
+      
       await gitClient.commit(commitMessage);
       steps.push(`✅ Created commit: ${commitMessage}`);
 

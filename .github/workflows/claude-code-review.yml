@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write  # Required to post trigger comment
       issues: read
       id-token: write
     
@@ -21,6 +21,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+
+      - name: Trigger Claude Review
+        run: |
+          echo "🤖 Triggering automated Claude code review..."
+          gh pr comment ${{ github.event.pull_request.number }} --body "@claude-auto-review
+          
+          Please perform a comprehensive code review of this pull request using the structured format specified in the workflow configuration."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Claude Code Review
         id: claude-review
@@ -31,63 +40,66 @@ jobs:
           # Optional: Specify model (defaults to Claude Sonnet 4, uncomment for Claude Opus 4)
           # model: "claude-opus-4-20250514"
           
-          # Direct prompt for automated review (no @claude mention needed)
-          direct_prompt: |
-            **IMPORTANT: You must provide a comprehensive, structured code review that will be captured by our workflow system.**
+          # Configure for automated reviews
+          trigger_phrase: "@claude-auto-review"
+          use_sticky_comment: true
+          
+          # Custom instructions for comprehensive reviews
+          custom_instructions: |
+            You are performing an automated code review for a CI/CD pipeline. Your review will be captured by automated systems for merge decisions.
             
-            Please review this pull request and provide detailed feedback. Your response will be saved as an artifact for the merge decision process, so please be thorough and complete.
+            **CRITICAL REQUIREMENTS:**
+            1. Use EXACTLY this format for your response
+            2. Fill in ALL sections with actual content (no placeholders)
+            3. Be thorough and specific in your analysis
+            4. This review will be used by automated merge decision systems
             
-            **Required Review Structure - Use this exact format:**
+            **Required Response Format:**
             
             # Code Review Summary
             
             **Overall Assessment:** [Approve/Request Changes/Comment]
             
             **Key Findings:**
-            - [List your main findings here - be specific]
-            - [Include any issues or concerns]
-            - [Note positive aspects as well]
+            - [List specific findings - be detailed]
+            - [Include any issues or concerns you identify]
+            - [Note positive aspects of the code]
             
-            **Security Concerns:** [Any security issues - write "None identified" if none]
+            **Security Concerns:** [Detailed security analysis or "None identified"]
             
-            **Code Quality:** [Assessment of code quality, patterns, best practices]
+            **Code Quality:** [Assessment of patterns, style, maintainability]
             
-            **Testing:** [Assessment of test coverage and quality]
+            **Testing:** [Analysis of test coverage and quality]
             
-            **Performance:** [Any performance considerations - write "No concerns" if none]
+            **Performance:** [Performance considerations or "No concerns"]
             
             ## Detailed Analysis
             
             **Files Changed:**
-            [Analyze each changed file and provide specific feedback]
+            [Analyze each file with specific feedback]
             
             **Code Patterns:**
-            [Comment on coding patterns, style, maintainability]
+            [Comment on coding patterns and architecture]
             
             **Potential Issues:**
-            [List any bugs, edge cases, or concerns you identify]
+            [List bugs, edge cases, or concerns]
             
             **Best Practices:**
-            [Comment on adherence to best practices]
+            [Adherence to coding standards and best practices]
             
             ## Recommendations
             
-            - [Provide specific, actionable recommendations]
-            - [Include both required changes and suggestions for improvement]
+            - [Specific, actionable recommendations]
+            - [Required changes and improvement suggestions]
             - [If no changes needed, state "No changes required"]
             
             ## Final Recommendation
             
             **Decision:** [APPROVE/REQUEST_CHANGES/COMMENT]
             **Reasoning:** [Clear explanation of your decision]
-            **Merge Safety:** [Is this safe to merge? Any blockers?]
+            **Merge Safety:** [Safety assessment and any blockers]
             
-            ---
-            
-            **CRITICAL**: Ensure your response includes all the sections above with actual content. Do not just provide checkboxes or placeholder text. This review will be used by automated systems to make merge decisions.
-
-          # Optional: Use sticky comments to make Claude reuse comment on subsequent pushes
-          use_sticky_comment: true
+            Remember: This is an automated review for CI/CD. Be comprehensive and use the exact format above.
 
       - name: Capture Claude review content
         if: always()  # Always run to capture review content

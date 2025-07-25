@@ -106,9 +106,9 @@ export function validateConventionalCommit(message: string): ValidationResult {
     }
   }
   
-  // Validate overall message length
+  // Validate overall message length (strict enforcement to match commitlint)
   if (message.length > 72) {
-    warnings.push('First line should be under 72 characters');
+    errors.push(`Header must not be longer than 72 characters, current length is ${message.length}`);
   }
 
   const parts: ConventionalCommitParts = {

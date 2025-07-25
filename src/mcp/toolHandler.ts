@@ -339,6 +339,21 @@ export class ToolHandler {
 
       // Phase 4: Create commit
       const commitMessage = analysis.commitMessage;
+      
+      // Validate commit message before committing
+      const commitValidation = await analyzer.validateCommitMessage(commitMessage);
+      if (!commitValidation.valid) {
+        const errorMsg = `❌ **Commit Message Validation Failed**\n\n` +
+          `**Errors:**\n${commitValidation.errors.map((e: string) => `• ${e}`).join('\n')}\n\n` +
+          `**Message:** \`${commitMessage}\`\n\n` +
+          `GitPlus enforces conventional commit standards to match CI validation.`;
+        
+        return {
+          content: [{ type: 'text', text: errorMsg }],
+          isError: true,
+        };
+      }
+      
       await gitClient.commit(commitMessage);
       steps.push(`✅ Created commit: ${commitMessage}`);
 
