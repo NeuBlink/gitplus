@@ -356,10 +356,12 @@ jobs:
             echo "📋 PR approved but requires manual merge (action: ${{ steps.parse-decision.outputs.RECOMMENDED_ACTION }})"
           fi
           
-          # Create success status
+          # Create success status (truncate description to 140 chars max)
+          REASON="${{ steps.parse-decision.outputs.REASON }}"
+          DESCRIPTION="Claude AI approved: ${REASON:0:120}"  # Leave room for prefix
           gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha || github.sha }} \
             -f state=success \
-            -f description="Claude AI approved: ${{ steps.parse-decision.outputs.REASON }}" \
+            -f description="$DESCRIPTION" \
             -f context="merge-decision" 2>/dev/null || echo "::warning::Status creation failed"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -375,10 +377,11 @@ jobs:
             echo "⚠️ Critical Issues: ${{ steps.parse-decision.outputs.CRITICAL_ISSUES }}"
           fi
           
-          # Create failure status
+          # Create failure status (truncate description to 140 chars max)
           DESCRIPTION="Claude AI rejected PR"
           if [ -n "${{ steps.parse-decision.outputs.REASON }}" ]; then
-            DESCRIPTION="${DESCRIPTION}: ${{ steps.parse-decision.outputs.REASON }}"
+            REASON="${{ steps.parse-decision.outputs.REASON }}"
+            DESCRIPTION="${DESCRIPTION}: ${REASON:0:115}"  # Leave room for prefix
           fi
           
           gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha || github.sha }} \
