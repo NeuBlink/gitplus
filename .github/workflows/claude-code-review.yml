@@ -111,9 +111,9 @@ jobs:
           while [ $ATTEMPT -le $MAX_ATTEMPTS ] && [ "$FOUND_REVIEW" = false ]; do
             echo "📋 Attempt $ATTEMPT/$MAX_ATTEMPTS: Looking for Claude review content..."
             
-            # Single API call with optimized jq processing
-            JQ_FILTER='.comments[] | select(.author.login == "claude" and (.body | length > ($min_length | tonumber))) | {body: .body, length: (.body | length)}'
-            REVIEW_DATA=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json comments --jq --arg min_length "$MIN_REVIEW_LENGTH" "$JQ_FILTER")
+            # Get all comments and filter for Claude comments with sufficient length
+            ALL_COMMENTS=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json comments)
+            REVIEW_DATA=$(echo "$ALL_COMMENTS" | jq --arg min_length "$MIN_REVIEW_LENGTH" '.comments[] | select(.author.login == "claude" and (.body | length > ($min_length | tonumber))) | {body: .body, length: (.body | length)}')
             
             if [ -n "$REVIEW_DATA" ] && [ "$REVIEW_DATA" != "null" ]; then
               POTENTIAL_REVIEW=$(echo "$REVIEW_DATA" | jq -r '.body')
