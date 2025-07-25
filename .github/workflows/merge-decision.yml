@@ -13,7 +13,7 @@ permissions:
   id-token: write
 
 jobs:
-  ai-merge-decision:
+  merge-decision:
     runs-on: ubuntu-latest
     
     steps:
@@ -46,11 +46,11 @@ jobs:
             elapsed=0
             
             while [ $elapsed -lt $timeout ]; do
-              status=$(gh pr checks ${{ github.event.pull_request.number }} --json name,status \
-                | jq -r ".[] | select(.name == \"$check\") | .status" || echo "pending")
+              state=$(gh pr checks ${{ github.event.pull_request.number }} --json name,state \
+                | jq -r ".[] | select(.name == \"$check\") | .state" || echo "pending")
               
-              if [ "$status" != "pending" ] && [ "$status" != "queued" ] && [ "$status" != "" ]; then
-                echo "$check completed with status: $status"
+              if [ "$state" != "pending" ] && [ "$state" != "queued" ] && [ "$state" != "" ]; then
+                echo "$check completed with state: $state"
                 break
               fi
               
@@ -73,8 +73,8 @@ jobs:
           
           # Get all check results
           echo "CHECK_RESULTS<<EOF" >> $GITHUB_OUTPUT
-          gh pr checks ${{ github.event.pull_request.number }} --json name,status,conclusion \
-            | jq -r '.[] | "\(.name): \(.status) (\(.conclusion // "pending"))"' >> $GITHUB_OUTPUT
+          gh pr checks ${{ github.event.pull_request.number }} --json name,state,conclusion \
+            | jq -r '.[] | "\(.name): \(.state) (\(.conclusion // "pending"))"' >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           
           # Get PR metadata
@@ -115,7 +115,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: AI Merge Decision
+      - name: Merge Decision
         id: merge-decision
         uses: anthropics/claude-code-action@e26577a930883943cf9d90885cd1e8da510078dd # beta
         with:
@@ -241,12 +241,12 @@ jobs:
 
   merge-decision-summary:
     runs-on: ubuntu-latest
-    needs: [ai-merge-decision]
+    needs: [merge-decision]
     if: always()
     steps:
       - name: Merge Decision Summary
         run: |
-          result="${{ needs.ai-merge-decision.result }}"
+          result="${{ needs.merge-decision.result }}"
           
           echo "# 🤖 Merge Decision Summary"
           echo ""
@@ -255,7 +255,7 @@ jobs:
             "success")
               echo "## ✅ Decision: APPROVED"
               echo ""
-              echo "The AI merge decider has approved this PR for merging."
+              echo "The merge decider has approved this PR for merging."
               echo "- All required checks have passed"
               echo "- Claude's code review is positive"
               echo "- No blocking issues identified"
@@ -265,7 +265,7 @@ jobs:
             "failure")
               echo "## ❌ Decision: REJECTED"
               echo ""
-              echo "The AI merge decider has rejected this PR."
+              echo "The merge decider has rejected this PR."
               echo ""
               echo "Please review:"
               echo "1. Claude's review comments for specific issues"
