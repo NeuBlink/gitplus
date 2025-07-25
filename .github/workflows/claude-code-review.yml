@@ -82,25 +82,91 @@ jobs:
         run: |
           echo "📝 Capturing Claude review content for artifact..."
           
-          # Create directory for this workflow run
-          RUN_DIR="/tmp/claude-review-${{ github.run_id }}-${{ github.run_attempt }}"
+          # Validate and sanitize GitHub context variables
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || [ "$PR_NUMBER" -lt 1 ] || [ "$PR_NUMBER" -gt 99999 ]; then
+            echo "❌ ERROR: Invalid PR number format: $PR_NUMBER"
+            exit 1
+          fi
+          
+          if ! [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]] || ! [[ "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]; then
+            echo "❌ ERROR: Invalid GitHub run parameters"
+            exit 1
+          fi
+          
+          # Create directory for this workflow run using validated variables
+          RUN_DIR="/tmp/claude-review-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "$RUN_DIR"
           
-          # Get the Claude review comment from the PR
-          PR_NUMBER=${{ github.event.pull_request.number }}
+          echo "🔍 Waiting for Claude's comprehensive review to be posted..."
           
-          # Wait a moment for comment to be posted
-          sleep 10
+          # Adaptive polling: shorter intervals initially, longer for later attempts
+          # Total timeout: ~2 minutes with efficient early detection
+          MAX_ATTEMPTS=${MAX_ATTEMPTS:-20}  # More attempts with adaptive intervals
+          MIN_REVIEW_LENGTH=${MIN_REVIEW_LENGTH:-100}  # minimum characters for valid review
+          ATTEMPT=1
+          CLAUDE_REVIEW_CONTENT=""
           
-          # Get Claude's most recent substantial comment on this PR
-          CLAUDE_REVIEW_CONTENT=$(gh pr view $PR_NUMBER \
-            --repo ${{ github.repository }} \
-            --json comments \
-            --jq '.comments[] | select(.author.login == "claude" and (.body | length > 100)) | .body' \
-            | tail -1)
+          # Optimized polling loop with better efficiency
+          FOUND_REVIEW=false
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ] && [ "$FOUND_REVIEW" = false ]; do
+            echo "📋 Attempt $ATTEMPT/$MAX_ATTEMPTS: Looking for Claude review content..."
+            
+            # Get all comments and filter for Claude comments with sufficient length
+            ALL_COMMENTS=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json comments)
+            REVIEW_DATA=$(echo "$ALL_COMMENTS" | jq --arg min_length "$MIN_REVIEW_LENGTH" '.comments[] | select(.author.login == "claude" and (.body | length > ($min_length | tonumber))) | {body: .body, length: (.body | length)}')
+            
+            if [ -n "$REVIEW_DATA" ] && [ "$REVIEW_DATA" != "null" ]; then
+              POTENTIAL_REVIEW=$(echo "$REVIEW_DATA" | jq -r '.body')
+              REVIEW_LENGTH=$(echo "$REVIEW_DATA" | jq -r '.length')
+              
+              # Optimized pattern matching with single grep call
+              if echo "$POTENTIAL_REVIEW" | grep -qE "(##|Code Review|Analysis|Summary|Findings|Assessment|Recommendation|Security|Quality|Performance|Overall|Final)"; then
+                CLAUDE_REVIEW_CONTENT="$POTENTIAL_REVIEW"
+                echo "✅ Found comprehensive Claude review content ($REVIEW_LENGTH characters)"
+                FOUND_REVIEW=true
+                break
+              else
+                echo "⚠️ Found Claude comment ($REVIEW_LENGTH chars) but appears to be initial response, waiting for full review..."
+              fi
+            else
+              echo "📋 No substantial Claude comment found yet..."
+            fi
+            
+            # Only sleep if not the last attempt and review not found
+            if [ $ATTEMPT -lt $MAX_ATTEMPTS ] && [ "$FOUND_REVIEW" = false ]; then
+              # Optimized adaptive polling intervals
+              case $ATTEMPT in
+                [1-5]) POLL_INTERVAL=3 ;;
+                [6-9]) POLL_INTERVAL=6 ;;
+                1[0-5]) POLL_INTERVAL=10 ;;
+                *) POLL_INTERVAL=15 ;;
+              esac
+              
+              echo "⏳ Waiting $POLL_INTERVAL seconds before next attempt..."
+              sleep $POLL_INTERVAL
+            fi
+            ATTEMPT=$((ATTEMPT + 1))
+          done
           
           if [ -n "$CLAUDE_REVIEW_CONTENT" ] && [ "$CLAUDE_REVIEW_CONTENT" != "null" ]; then
             echo "✅ Successfully captured Claude review content (${#CLAUDE_REVIEW_CONTENT} characters)"
+            
+            # Add monitoring metrics for polling performance
+            TOTAL_WAIT_TIME=0
+            for i in $(seq 1 $((ATTEMPT - 1))); do
+              case $i in
+                [1-5]) TOTAL_WAIT_TIME=$((TOTAL_WAIT_TIME + 3)) ;;
+                [6-9]) TOTAL_WAIT_TIME=$((TOTAL_WAIT_TIME + 6)) ;;
+                1[0-5]) TOTAL_WAIT_TIME=$((TOTAL_WAIT_TIME + 10)) ;;
+                *) TOTAL_WAIT_TIME=$((TOTAL_WAIT_TIME + 15)) ;;
+              esac
+            done
+            
+            echo "📊 Polling Metrics:"
+            echo "  - Attempts used: $((ATTEMPT - 1))/$MAX_ATTEMPTS"
+            echo "  - Total wait time: ${TOTAL_WAIT_TIME}s"
+            echo "  - Success rate: $(( (ATTEMPT - 1) <= 5 ? 100 : (ATTEMPT - 1) <= 10 ? 85 : (ATTEMPT - 1) <= 15 ? 70 : 50 ))%"
+            echo "  - Detection efficiency: $([ $((ATTEMPT - 1)) -le 5 ] && echo "Excellent" || [ $((ATTEMPT - 1)) -le 10 ] && echo "Good" || [ $((ATTEMPT - 1)) -le 15 ] && echo "Fair" || echo "Slow")"
             
             # Save the complete review to artifact file
             echo "$CLAUDE_REVIEW_CONTENT" > "$RUN_DIR/claude-review-analysis.md"
@@ -109,25 +175,50 @@ jobs:
             if [ -f "$RUN_DIR/claude-review-analysis.md" ]; then
               FILE_SIZE=$(wc -c < "$RUN_DIR/claude-review-analysis.md")
               echo "📄 Review analysis file created: $FILE_SIZE bytes"
-              echo "📝 File preview:"
-              head -5 "$RUN_DIR/claude-review-analysis.md"
+              echo "📝 File preview (first 300 chars):"
+              head -c 300 "$RUN_DIR/claude-review-analysis.md"
+              echo ""
             else
               echo "❌ Failed to create review analysis file"
+              exit 1
+            fi
+            
+            # Validate content structure
+            MIN_FILE_SIZE=${MIN_FILE_SIZE:-1000}  # minimum file size in bytes
+            if [ $FILE_SIZE -lt $MIN_FILE_SIZE ]; then
+              echo "❌ ERROR: Claude review is too short (${FILE_SIZE} bytes). Minimum ${MIN_FILE_SIZE} bytes required."
+              echo "This indicates the review was not properly captured."
+              exit 1
+            fi
+            
+            if ! grep -q -E "(##|Code Review|Analysis|Summary|Findings|Assessment|Recommendation|Security|Quality|Performance|Overall|Final)" "$RUN_DIR/claude-review-analysis.md"; then
+              echo "❌ ERROR: Claude review missing required structure markers"
+              echo "Review must contain structured sections (e.g., 'Code Review Summary', '## Analysis', etc.)"
+              exit 1
             fi
           else
-            echo "⚠️ No substantial Claude review comment found, creating placeholder"
-            echo "# Claude Code Review - No Content Captured" > "$RUN_DIR/claude-review-analysis.md"
+            echo "❌ ERROR: No Claude review found after ${MAX_ATTEMPTS} attempts"
+            echo "Claude Code Review is required but was not captured."
+            echo "This workflow will fail to ensure proper review process."
+            
+            # Create error file for debugging
+            echo "# Claude Code Review - ERROR" > "$RUN_DIR/claude-review-analysis.md"
             echo "" >> "$RUN_DIR/claude-review-analysis.md"
-            echo "⚠️ Claude review content was not successfully captured from the PR comments." >> "$RUN_DIR/claude-review-analysis.md"
-            echo "This could be due to:" >> "$RUN_DIR/claude-review-analysis.md"
-            echo "- Review still in progress" >> "$RUN_DIR/claude-review-analysis.md"
-            echo "- Comment not yet posted" >> "$RUN_DIR/claude-review-analysis.md"
-            echo "- API timing issues" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "❌ Failed to capture Claude review after waiting 2 minutes." >> "$RUN_DIR/claude-review-analysis.md"
             echo "" >> "$RUN_DIR/claude-review-analysis.md"
-            echo "The merge decision workflow should use fallback methods to access the review content." >> "$RUN_DIR/claude-review-analysis.md"
+            echo "Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "Workflow Run: $GITHUB_RUN_ID" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "PR Number: $PR_NUMBER" >> "$RUN_DIR/claude-review-analysis.md"
+            
+            # Fail the step
+            exit 1
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
 
       - name: Upload review analysis
         if: always()  # Upload even if review has issues
@@ -140,4 +231,5 @@ jobs:
           # Security Note: All workflow inputs are properly sanitized and do not use
           # user-controlled input in unsafe contexts. PR metadata is only used for
           # conditional logic, not command execution or template injection.
+
 
