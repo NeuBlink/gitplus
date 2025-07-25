@@ -237,7 +237,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           use_sticky_comment: true
           # Allow Claude to run specific commands including file operations
-          allowed_tools: "Bash(echo *),Bash(cat *),Bash(mkdir *),Bash(chmod *),Write(*),Read(*)"
+          allowed_tools: "Bash,Write,Read"
           
           direct_prompt: |
             You are an AI merge decision maker. Analyze the complete context below and decide whether this PR should be merged.
