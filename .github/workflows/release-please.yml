@@ -1,0 +1,91 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+
+# Prevent concurrent releases
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Release Please
+      uses: googleapis/release-please-action@7987652d64b4581673a76e33ad5e98e3dd56832f # v4.1.3
+      id: release
+      with:
+        config-file: .release-please-config.json
+        manifest-file: .release-please-manifest.json
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    # Publish to npm when a release is created
+    - name: Checkout code
+      if: ${{ steps.release.outputs.release_created }}
+      uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      
+    - name: Setup Node.js
+      if: ${{ steps.release.outputs.release_created }}
+      uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
+      with:
+        node-version: '20.x'
+        registry-url: 'https://registry.npmjs.org'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      if: ${{ steps.release.outputs.release_created }}
+      run: npm ci
+      
+    - name: Build project
+      if: ${{ steps.release.outputs.release_created }}
+      run: npm run build
+      
+    - name: Publish to npm
+      if: ${{ steps.release.outputs.release_created }}
+      run: npm publish --access public
+      env:
+        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        
+    - name: Comment on release
+      if: ${{ steps.release.outputs.release_created }}
+      continue-on-error: true
+      uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+      with:
+        script: |
+          try {
+            const releaseUrl = `https://github.com/${{ github.repository }}/releases/tag/${{ steps.release.outputs.tag_name }}`;
+            const npmUrl = `https://www.npmjs.com/package/@neublink/gitplus/v/${{ steps.release.outputs.major }}.${{ steps.release.outputs.minor }}.${{ steps.release.outputs.patch }}`;
+            
+            const comment = `🚀 **Release ${{ steps.release.outputs.tag_name }} Published!**
+            
+            📦 **NPM Package**: ${npmUrl}
+            📋 **Release Notes**: ${releaseUrl}
+            
+            ### Installation
+            \`\`\`bash
+            # Install as MCP server in Claude Code
+            claude mcp add gitplus -- npx @neublink/gitplus@${{ steps.release.outputs.tag_name }}
+            
+            # Or install CLI globally
+            npm install -g @neublink/gitplus@${{ steps.release.outputs.tag_name }}
+            \`\`\``;
+            
+            await github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+              body: comment
+            });
+            
+            console.log('✅ Release comment created successfully');
+          } catch (error) {
+            console.error('⚠️ Failed to create release comment:', error.message);
+            // Don't fail the workflow for comment creation issues
+          }
