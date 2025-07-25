@@ -2,7 +2,7 @@ import { toolDefinitions } from '../../src/mcp/toolDefinitions';
 
 describe('MCP Tool Definitions', () => {
   it('should have all required tools defined', () => {
-    const expectedTools = ['ship', 'commit', 'analyze', 'suggest', 'pr_draft', 'status', 'merge_local'];
+    const expectedTools = ['ship', 'status', 'info'];
     
     const actualTools = toolDefinitions.map(tool => tool.name);
     
@@ -16,13 +16,13 @@ describe('MCP Tool Definitions', () => {
     expect(shipTool).toBeDefined();
     expect(shipTool?.description.toLowerCase()).toContain('complete git workflow');
 
-    const commitTool = toolDefinitions.find(tool => tool.name === 'commit');
-    expect(commitTool).toBeDefined();
-    expect(commitTool?.description.toLowerCase()).toContain('commit');
+    const statusTool = toolDefinitions.find(tool => tool.name === 'status');
+    expect(statusTool).toBeDefined();
+    expect(statusTool?.description.toLowerCase()).toContain('status');
 
-    const prTool = toolDefinitions.find(tool => tool.name === 'pr_draft');
-    expect(prTool).toBeDefined();
-    expect(prTool?.description.toLowerCase()).toContain('pull request');
+    const infoTool = toolDefinitions.find(tool => tool.name === 'info');
+    expect(infoTool).toBeDefined();
+    expect(infoTool?.description.toLowerCase()).toContain('information');
   });
 
   it('should have inputSchema defined for all tools', () => {
