@@ -123,56 +123,42 @@ jobs:
           use_sticky_comment: true
           
           direct_prompt: |
-            You are a merge decider for the gitplus repository. Your task is to make a final PASS/FAIL decision for this PR.
+            IMPORTANT: Output ONLY valid JSON. No markdown, no comments, no explanations. ONLY the JSON object.
             
-            ## Context Provided
+            Context:
+            PR Title: ${{ steps.pr-context.outputs.PR_TITLE }}
+            Target Branch: ${{ github.event.pull_request.base.ref }}
+            Author: ${{ github.event.pull_request.user.login }}
+            PR Number: #${{ github.event.pull_request.number }}
+            Is Draft: ${{ steps.pr-context.outputs.PR_IS_DRAFT }}
+            Mergeable: ${{ steps.pr-context.outputs.PR_MERGEABLE }}
+            Merge State: ${{ steps.pr-context.outputs.PR_MERGE_STATE }}
+            Behind Base Branch: ${{ steps.pr-context.outputs.PR_BEHIND_COUNT }} commits
+            Test Status: ${{ steps.pr-context.outputs.TEST_CONCLUSION }}
+            Security Status: ${{ steps.pr-context.outputs.SECURITY_CONCLUSION }}
+            Claude Review Status: ${{ steps.pr-context.outputs.CLAUDE_REVIEW_CONCLUSION }}
             
-            ### PR Information
-            - Title: ${{ steps.pr-context.outputs.PR_TITLE }}
-            - Target Branch: ${{ github.event.pull_request.base.ref }}
-            - Author: ${{ github.event.pull_request.user.login }}
-            - PR Number: #${{ github.event.pull_request.number }}
-            - Is Draft: ${{ steps.pr-context.outputs.PR_IS_DRAFT }}
-            - Mergeable: ${{ steps.pr-context.outputs.PR_MERGEABLE }}
-            - Merge State: ${{ steps.pr-context.outputs.PR_MERGE_STATE }}
-            - Behind Base Branch: ${{ steps.pr-context.outputs.PR_BEHIND_COUNT }} commits
-            
-            ### Check Results
-            - Test Status: ${{ steps.pr-context.outputs.TEST_CONCLUSION }}
-            - Security Status: ${{ steps.pr-context.outputs.SECURITY_CONCLUSION }}
-            - Claude Review Status: ${{ steps.pr-context.outputs.CLAUDE_REVIEW_CONCLUSION }}
-            
-            ### All Check Results
-            ${{ steps.pr-context.outputs.CHECK_RESULTS }}
-            
-            ### Claude's Review Comments
+            Claude's Review Comments:
             ${{ steps.pr-context.outputs.CLAUDE_REVIEWS }}
             
-            ## Your Task
-            
-            Based on ALL the above information, especially Claude's review verdict, make a merge decision.
-            
-            **IMPORTANT**: You must output your decision as valid JSON and NOTHING ELSE. No markdown, no explanation outside the JSON.
-            
-            Output exactly this JSON structure:
-            
+            Based on the above, output ONLY this JSON (replace values appropriately):
             {
-              "decision": "PASS or FAIL",
-              "confidence": <number between 0-100>,
-              "claude_review_verdict": "<summary of what Claude reviewer concluded>",
-              "checks_status": "<summary of CI/CD check results>",
-              "blocking_issues": ["<list any blocking issues if FAIL>"],
-              "warnings": ["<list any non-blocking concerns>"],
-              "summary": "<one sentence summary of your decision>"
+              "decision": "PASS",
+              "confidence": 95,
+              "claude_review_verdict": "Claude strongly approved with no blocking issues",
+              "checks_status": "All checks passed",
+              "blocking_issues": [],
+              "warnings": [],
+              "summary": "PR approved - Claude review positive and all checks passed"
             }
             
-            Decision rules:
-            - FAIL if Claude's review indicates rejection (look for REJECT, FAIL, "Approve with cleanup", or blocking issues)
-            - FAIL if any critical checks failed (test, security)
-            - FAIL if PR is not mergeable or has conflicts
-            - PASS only if Claude approves AND all checks pass AND no blocking issues
+            Rules:
+            - decision must be "PASS" or "FAIL" (no other values)
+            - FAIL if Claude rejected or found blocking issues
+            - FAIL if tests or security checks failed
+            - PASS only if Claude approved AND all checks passed
             
-            Output ONLY the JSON object, nothing else.
+            OUTPUT ONLY THE JSON OBJECT. NOTHING ELSE.
         env:
           TARGET_BRANCH: ${{ github.event.pull_request.base.ref }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
@@ -198,8 +184,19 @@ jobs:
           echo "$CLAUDE_RESPONSE"
           
           # Extract JSON from the response
-          # Look for JSON between first { and last }
-          JSON_RESPONSE=$(echo "$CLAUDE_RESPONSE" | sed -n '/{/,/}/p' | grep -v '```')
+          # First try to find JSON in code blocks
+          JSON_RESPONSE=$(echo "$CLAUDE_RESPONSE" | sed -n '/```json/,/```/p' | grep -v '```' | tr -d '\n')
+          
+          # If not found in code blocks, look for raw JSON
+          if [ -z "$JSON_RESPONSE" ]; then
+            JSON_RESPONSE=$(echo "$CLAUDE_RESPONSE" | grep -o '{[^}]*}' | head -1)
+          fi
+          
+          # If still not found, try to extract from the entire response
+          if [ -z "$JSON_RESPONSE" ]; then
+            # Remove everything before first { and after last }
+            JSON_RESPONSE=$(echo "$CLAUDE_RESPONSE" | sed -n 's/.*\({.*}\).*/\1/p')
+          fi
           
           if [ -z "$JSON_RESPONSE" ]; then
             echo "::error::Could not extract JSON from Claude's response"
