@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import { GitClient } from './git/client';
 import { ChangeAnalyzer } from './git/analyzer';
 import { PlatformManager } from './git/platform';
+import { handlePRConflictResolution } from './utils/conflictUtils';
 import { Platform } from './types';
 
 // Get package version
@@ -281,6 +282,18 @@ program
                 if (prResponse.status === 'created') {
                   steps.push(`✅ Created PR: ${prResponse.url}`);
                   prInfo = `\n\n🔗 Pull Request: ${prResponse.url}`;
+                  
+                  // Check for PR conflicts and attempt resolution
+                  const targetBranch = options.baseBranch || status.baseBranch;
+                  const conflictResolution = await handlePRConflictResolution(
+                    gitClient,
+                    currentBranch,
+                    targetBranch,
+                    prResponse.url,
+                    { verbose: options.verbose }
+                  );
+                  
+                  steps.push(...conflictResolution.steps);
                 } else {
                   steps.push(`⚠️ PR creation failed: ${prResponse.message}`);
                 }

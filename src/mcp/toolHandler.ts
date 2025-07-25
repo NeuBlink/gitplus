@@ -2,6 +2,7 @@ import { ToolName } from './toolDefinitions';
 import { GitClient } from '../git/client';
 import { PlatformManager } from '../git/platform';
 import { ChangeAnalyzer } from '../git/analyzer';
+import { handlePRConflictResolution } from '../utils/conflictUtils';
 import { Platform } from '../types';
 
 // MCP Tool result type (matches the SDK's expected format with index signature)
@@ -445,6 +446,18 @@ export class ToolHandler {
               if (prResponse.status === 'created') {
                 steps.push(`✅ Created PR: ${prResponse.url}`);
                 prInfo = `\n\n🔗 **Pull Request:** ${prResponse.url}`;
+                
+                // Phase 6.5: Check for PR conflicts and attempt resolution
+                const targetBranch = baseBranch || updatedStatus.baseBranch;
+                const conflictResolution = await handlePRConflictResolution(
+                  gitClient,
+                  currentBranch,
+                  targetBranch,
+                  prResponse.url,
+                  { verbose, force }
+                );
+                
+                steps.push(...conflictResolution.steps);
               } else {
                 steps.push(`⚠️ PR creation failed: ${prResponse.message}`);
               }
