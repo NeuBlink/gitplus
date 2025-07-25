@@ -101,6 +101,7 @@ jobs:
             
             # Look for Claude comments with comprehensive content
             # Get the Claude comment body directly (should be only one)
+            # Fixed: Removed tail -1 which was truncating multi-line content
             POTENTIAL_REVIEW=$(gh pr view $PR_NUMBER \
               --repo ${{ github.repository }} \
               --json comments | \
