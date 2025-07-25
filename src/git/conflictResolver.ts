@@ -23,9 +23,9 @@ export class ConflictResolver {
   private gitClient: GitClient;
   private aiService: AIService;
 
-  constructor(gitClient: GitClient) {
+  constructor(gitClient: GitClient, aiService?: AIService) {
     this.gitClient = gitClient;
-    this.aiService = new AIService();
+    this.aiService = aiService || new AIService();
   }
 
   /**
@@ -47,82 +47,108 @@ export class ConflictResolver {
     try {
       steps.push('🔍 Checking for PR merge conflicts...');
 
-      // Pull the base branch to detect and resolve conflicts
-      const pullResult = await this.gitClient.pull({
-        branch: targetBranch,
-        strategy: 'merge'
-      });
-
-      if (!pullResult.success && pullResult.conflicts && pullResult.conflicts.length > 0) {
-        steps.push(`⚠️ PR has conflicts with ${targetBranch} (${pullResult.conflicts.length} files)`);
+      // Fetch the target branch and attempt merge to detect conflicts
+      await this.gitClient.fetch({ branch: targetBranch });
+      
+      try {
+        // Attempt to merge the target branch to simulate PR merge
+        await this.gitClient.merge(`origin/${targetBranch}`, { noFf: true });
         
-        // Check if AI resolution is available
-        const hasAICapabilities = await this.validateAICapabilities();
-        if (!hasAICapabilities) {
-          steps.push('⚠️ AI resolution not available - Claude CLI not found');
-          return {
-            steps,
-            hasConflicts: true,
-            resolved: false,
-            error: 'AI resolution unavailable'
-          };
-        }
-
-        steps.push('🤖 Attempting AI-powered conflict resolution...');
-
-        // Use specified strategy for PR conflicts
-        const resolveResult = await this.gitClient.resolveConflicts(strategy);
-
-        if (resolveResult.success) {
-          // Continue the merge
-          await this.gitClient.continueMerge();
-          steps.push(`✅ AI resolved ${resolveResult.resolvedFiles.length} conflicts (${resolveResult.confidence}% confidence)`);
-
-          if (resolveResult.warnings && resolveResult.warnings.length > 0) {
-            steps.push(`⚠️ AI warnings: ${resolveResult.warnings.join(', ')}`);
-          }
-
-          // Push the resolution to update the PR
-          await this.gitClient.push({ branch: currentBranch });
-          steps.push('✅ Updated PR with resolved conflicts');
-
-          return {
-            steps,
-            hasConflicts: true,
-            resolved: true
-          };
-        } else {
-          // Abort the merge since we couldn't resolve
-          const abortResult = await this.safeAbortMerge(verbose);
-          if (abortResult.error) {
-            steps.push(`⚠️ Failed to abort merge: ${abortResult.error}`);
-            steps.push('💡 Manual cleanup required: git merge --abort');
-          }
-
-          steps.push(`⚠️ AI couldn't resolve conflicts automatically: ${resolveResult.reasoning}`);
-          return {
-            steps,
-            hasConflicts: true,
-            resolved: false,
-            error: resolveResult.reasoning
-          };
-        }
-      } else if (pullResult.success) {
-        // Successfully merged without conflicts
+        // If we reach here, no conflicts occurred
         steps.push('✅ PR has no conflicts with base branch');
         return {
           steps,
           hasConflicts: false,
           resolved: true
         };
-      } else {
-        // Pull failed for other reasons
-        return {
-          steps,
-          hasConflicts: false,
-          resolved: false,
-          error: pullResult.output || 'Pull operation failed'
-        };
+      } catch (mergeError: any) {
+        // Check if this is a merge conflict error
+        if (mergeError.message && mergeError.message.toLowerCase().includes('conflict')) {
+          const conflicts = await this.gitClient.getConflictedFiles();
+          
+          if (conflicts && conflicts.length > 0) {
+            steps.push(`⚠️ PR has conflicts with ${targetBranch} (${conflicts.length} files)`);
+            
+            // Check if AI resolution is available
+            const hasAICapabilities = await this.validateAICapabilities();
+            if (!hasAICapabilities) {
+              steps.push('⚠️ AI resolution not available - Claude CLI not found');
+              return {
+                steps,
+                hasConflicts: true,
+                resolved: false,
+                error: 'AI resolution unavailable'
+              };
+            }
+
+            steps.push('🤖 Attempting AI-powered conflict resolution...');
+
+            // Use specified strategy for PR conflicts
+            const resolveResult = await this.gitClient.resolveConflicts(strategy);
+
+            if (resolveResult.success) {
+              // Continue the merge
+              await this.gitClient.continueMerge();
+              steps.push(`✅ AI resolved ${resolveResult.resolvedFiles.length} conflicts (${resolveResult.confidence}% confidence)`);
+
+              if (resolveResult.warnings && resolveResult.warnings.length > 0) {
+                steps.push(`⚠️ AI warnings: ${resolveResult.warnings.join(', ')}`);
+              }
+
+              // Push the resolution to update the PR with error handling
+              try {
+                await this.gitClient.push({ branch: currentBranch });
+                steps.push('✅ Updated PR with resolved conflicts');
+              } catch (pushError: any) {
+                const pushErrorMessage = pushError instanceof Error ? pushError.message : 'Unknown push error';
+                steps.push(`⚠️ Failed to push resolved conflicts: ${pushErrorMessage}`);
+                steps.push('💡 Manual push required: git push origin ' + currentBranch);
+                return {
+                  steps,
+                  hasConflicts: true,
+                  resolved: false,
+                  error: `Conflicts resolved but push failed: ${pushErrorMessage}`
+                };
+              }
+
+              return {
+                steps,
+                hasConflicts: true,
+                resolved: true
+              };
+            } else {
+              // Abort the merge since we couldn't resolve
+              const abortResult = await this.safeAbortMerge(verbose);
+              if (abortResult.error) {
+                steps.push(`⚠️ Failed to abort merge: ${abortResult.error}`);
+                steps.push('💡 Manual cleanup required: git merge --abort');
+              }
+
+              steps.push(`⚠️ AI couldn't resolve conflicts automatically: ${resolveResult.reasoning}`);
+              return {
+                steps,
+                hasConflicts: true,
+                resolved: false,
+                error: resolveResult.reasoning
+              };
+            }
+          } else {
+            // No conflicts found, but merge failed for other reasons
+            const abortResult = await this.safeAbortMerge(verbose);
+            if (abortResult.error) {
+              steps.push(`⚠️ Failed to abort merge: ${abortResult.error}`);
+            }
+            return {
+              steps,
+              hasConflicts: false,
+              resolved: false,
+              error: 'Merge failed for reasons other than conflicts'
+            };
+          }
+        } else {
+          // Not a merge conflict, re-throw the error
+          throw mergeError;
+        }
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -155,6 +181,18 @@ export class ConflictResolver {
    */
   private async safeAbortMerge(verbose: boolean): Promise<{ success: boolean; error?: string }> {
     try {
+      // Check if we're actually in a merge state before attempting abort
+      const isMergeInProgress = await this.gitClient.isMergeInProgress();
+      
+      if (!isMergeInProgress) {
+        if (verbose) {
+          console.warn('No merge in progress, skipping abort');
+        }
+        return { 
+          success: true  // Not an error if no merge to abort
+        };
+      }
+      
       await this.gitClient.abortMerge();
       return { success: true };
     } catch (error) {

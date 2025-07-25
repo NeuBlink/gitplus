@@ -28,11 +28,9 @@ describe('ConflictResolver', () => {
 
   describe('resolvePRConflicts', () => {
     it('should handle no conflicts scenario', async () => {
-      // Mock successful pull without conflicts
-      mockGitClient.pull.mockResolvedValue({
-        success: true,
-        output: 'Already up to date.'
-      });
+      // Mock successful fetch and merge without conflicts
+      mockGitClient.fetch.mockResolvedValue('Fetched successfully');
+      mockGitClient.merge.mockResolvedValue(undefined);
 
       const result = await conflictResolver.resolvePRConflicts('feature-branch', 'main');
 
@@ -43,12 +41,11 @@ describe('ConflictResolver', () => {
     });
 
     it('should handle conflicts with successful AI resolution', async () => {
-      // Mock pull with conflicts
-      mockGitClient.pull.mockResolvedValue({
-        success: false,
-        output: 'Merge conflict',
-        conflicts: ['file1.ts', 'file2.ts']
-      });
+      // Mock successful fetch but merge with conflicts
+      mockGitClient.fetch.mockResolvedValue('Fetched successfully');
+      const mergeError = new Error('Merge conflict in file1.ts');
+      mockGitClient.merge.mockRejectedValue(mergeError);
+      mockGitClient.getConflictedFiles.mockResolvedValue(['file1.ts', 'file2.ts']);
 
       // Mock AI availability
       mockAIService.isAvailable.mockResolvedValue(true);
@@ -80,12 +77,11 @@ describe('ConflictResolver', () => {
     });
 
     it('should handle conflicts when AI resolution fails', async () => {
-      // Mock pull with conflicts
-      mockGitClient.pull.mockResolvedValue({
-        success: false,
-        output: 'Merge conflict',
-        conflicts: ['file1.ts']
-      });
+      // Mock fetch and merge with conflicts
+      mockGitClient.fetch.mockResolvedValue('Fetched successfully');
+      const mergeError = new Error('Merge conflict in file1.ts');
+      mockGitClient.merge.mockRejectedValue(mergeError);
+      mockGitClient.getConflictedFiles.mockResolvedValue(['file1.ts']);
 
       // Mock AI availability
       mockAIService.isAvailable.mockResolvedValue(true);
@@ -99,7 +95,8 @@ describe('ConflictResolver', () => {
         warnings: []
       });
 
-      // Mock successful abort
+      // Mock merge in progress and successful abort
+      mockGitClient.isMergeInProgress.mockResolvedValue(true);
       mockGitClient.abortMerge.mockResolvedValue(undefined);
 
       const result = await conflictResolver.resolvePRConflicts('feature-branch', 'main');
@@ -111,12 +108,11 @@ describe('ConflictResolver', () => {
     });
 
     it('should handle AI unavailability', async () => {
-      // Mock pull with conflicts
-      mockGitClient.pull.mockResolvedValue({
-        success: false,
-        output: 'Merge conflict',
-        conflicts: ['file1.ts']
-      });
+      // Mock fetch and merge with conflicts
+      mockGitClient.fetch.mockResolvedValue('Fetched successfully');
+      const mergeError = new Error('Merge conflict in file1.ts');
+      mockGitClient.merge.mockRejectedValue(mergeError);
+      mockGitClient.getConflictedFiles.mockResolvedValue(['file1.ts']);
 
       // Mock AI unavailable
       mockAIService.isAvailable.mockResolvedValue(false);
@@ -130,12 +126,11 @@ describe('ConflictResolver', () => {
     });
 
     it('should handle abort merge failure gracefully', async () => {
-      // Mock pull with conflicts
-      mockGitClient.pull.mockResolvedValue({
-        success: false,
-        output: 'Merge conflict',
-        conflicts: ['file1.ts']
-      });
+      // Mock fetch and merge with conflicts
+      mockGitClient.fetch.mockResolvedValue('Fetched successfully');
+      const mergeError = new Error('Merge conflict in file1.ts');
+      mockGitClient.merge.mockRejectedValue(mergeError);
+      mockGitClient.getConflictedFiles.mockResolvedValue(['file1.ts']);
 
       // Mock AI availability
       mockAIService.isAvailable.mockResolvedValue(true);
@@ -149,7 +144,8 @@ describe('ConflictResolver', () => {
         warnings: []
       });
 
-      // Mock failed abort
+      // Mock merge in progress but failed abort
+      mockGitClient.isMergeInProgress.mockResolvedValue(true);
       mockGitClient.abortMerge.mockRejectedValue(new Error('Abort failed'));
 
       const result = await conflictResolver.resolvePRConflicts('feature-branch', 'main', { verbose: true });
@@ -161,12 +157,11 @@ describe('ConflictResolver', () => {
     });
 
     it('should include AI warnings in output', async () => {
-      // Mock pull with conflicts
-      mockGitClient.pull.mockResolvedValue({
-        success: false,
-        output: 'Merge conflict',
-        conflicts: ['file1.ts']
-      });
+      // Mock fetch and merge with conflicts
+      mockGitClient.fetch.mockResolvedValue('Fetched successfully');
+      const mergeError = new Error('Merge conflict in file1.ts');
+      mockGitClient.merge.mockRejectedValue(mergeError);
+      mockGitClient.getConflictedFiles.mockResolvedValue(['file1.ts']);
 
       // Mock AI availability
       mockAIService.isAvailable.mockResolvedValue(true);
@@ -191,11 +186,8 @@ describe('ConflictResolver', () => {
     });
 
     it('should handle pull failures gracefully', async () => {
-      // Mock pull failure
-      mockGitClient.pull.mockResolvedValue({
-        success: false,
-        output: 'Network error'
-      });
+      // Mock fetch failure
+      mockGitClient.fetch.mockRejectedValue(new Error('Network error'));
 
       const result = await conflictResolver.resolvePRConflicts('feature-branch', 'main');
 
@@ -205,8 +197,8 @@ describe('ConflictResolver', () => {
     });
 
     it('should handle unexpected errors with verbose output', async () => {
-      // Mock pull throwing an error
-      mockGitClient.pull.mockRejectedValue(new Error('Unexpected error'));
+      // Mock fetch throwing an error
+      mockGitClient.fetch.mockRejectedValue(new Error('Unexpected error'));
 
       const result = await conflictResolver.resolvePRConflicts('feature-branch', 'main', { verbose: true });
 
@@ -217,12 +209,11 @@ describe('ConflictResolver', () => {
     });
 
     it('should use custom strategy when provided', async () => {
-      // Mock pull with conflicts
-      mockGitClient.pull.mockResolvedValue({
-        success: false,
-        output: 'Merge conflict',
-        conflicts: ['file1.ts']
-      });
+      // Mock fetch and merge with conflicts
+      mockGitClient.fetch.mockResolvedValue('Fetched successfully');
+      const mergeError = new Error('Merge conflict in file1.ts');
+      mockGitClient.merge.mockRejectedValue(mergeError);
+      mockGitClient.getConflictedFiles.mockResolvedValue(['file1.ts']);
 
       mockAIService.isAvailable.mockResolvedValue(true);
       mockGitClient.resolveConflicts.mockResolvedValue({

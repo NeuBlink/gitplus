@@ -2,7 +2,7 @@ import { ToolName } from './toolDefinitions';
 import { GitClient } from '../git/client';
 import { PlatformManager } from '../git/platform';
 import { ChangeAnalyzer } from '../git/analyzer';
-import { ConflictResolver } from '../git/conflictResolver';
+import { handlePRConflictResolution } from '../utils/conflictUtils';
 import { Platform } from '../types';
 
 // MCP Tool result type (matches the SDK's expected format with index signature)
@@ -448,22 +448,16 @@ export class ToolHandler {
                 prInfo = `\n\n🔗 **Pull Request:** ${prResponse.url}`;
                 
                 // Phase 6.5: Check for PR conflicts and attempt resolution
-                if (!force) {
-                  const conflictResolver = new ConflictResolver(gitClient);
-                  const targetBranch = baseBranch || updatedStatus.baseBranch;
-                  const conflictResult = await conflictResolver.resolvePRConflicts(
-                    currentBranch,
-                    targetBranch,
-                    { verbose }
-                  );
-                  
-                  steps.push(...conflictResult.steps);
-                  
-                  if (conflictResult.hasConflicts && !conflictResult.resolved) {
-                    steps.push(`📝 Manual resolution required - PR: ${prResponse.url}`);
-                    steps.push('💡 Tip: Pull the base branch locally, resolve conflicts, and push to update the PR');
-                  }
-                }
+                const targetBranch = baseBranch || updatedStatus.baseBranch;
+                const conflictResolution = await handlePRConflictResolution(
+                  gitClient,
+                  currentBranch,
+                  targetBranch,
+                  prResponse.url,
+                  { verbose, force }
+                );
+                
+                steps.push(...conflictResolution.steps);
               } else {
                 steps.push(`⚠️ PR creation failed: ${prResponse.message}`);
               }

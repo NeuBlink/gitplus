@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 import { GitClient } from './git/client';
 import { ChangeAnalyzer } from './git/analyzer';
 import { PlatformManager } from './git/platform';
-import { ConflictResolver } from './git/conflictResolver';
+import { handlePRConflictResolution } from './utils/conflictUtils';
 import { Platform } from './types';
 
 // Get package version
@@ -284,20 +284,16 @@ program
                   prInfo = `\n\n🔗 Pull Request: ${prResponse.url}`;
                   
                   // Check for PR conflicts and attempt resolution
-                  const conflictResolver = new ConflictResolver(gitClient);
                   const targetBranch = options.baseBranch || status.baseBranch;
-                  const conflictResult = await conflictResolver.resolvePRConflicts(
+                  const conflictResolution = await handlePRConflictResolution(
+                    gitClient,
                     currentBranch,
                     targetBranch,
+                    prResponse.url,
                     { verbose: options.verbose }
                   );
                   
-                  steps.push(...conflictResult.steps);
-                  
-                  if (conflictResult.hasConflicts && !conflictResult.resolved) {
-                    steps.push(`📝 Manual resolution required - PR: ${prResponse.url}`);
-                    steps.push('💡 Tip: Pull the base branch locally, resolve conflicts, and push to update the PR');
-                  }
+                  steps.push(...conflictResolution.steps);
                 } else {
                   steps.push(`⚠️ PR creation failed: ${prResponse.message}`);
                 }
