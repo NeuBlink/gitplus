@@ -1,6 +1,17 @@
 import { z } from 'zod';
 
-// Tool definitions for registration - using the correct MCP SDK format
+/**
+ * GitPlus MCP Tool Definitions
+ * 
+ * This file defines the 3 essential MCP tools that GitPlus exposes to Claude.
+ * The intentionally simplified interface provides maximum automation with minimal
+ * decision-making overhead.
+ * 
+ * Architecture Decision: Only 3 tools instead of 14+ CLI commands
+ * - Reduces complexity and decision paralysis
+ * - Each tool provides complete workflows rather than partial operations
+ * - AI handles all intelligent decision-making within each tool
+ */
 export const toolDefinitions = [
   {
     name: 'ship',

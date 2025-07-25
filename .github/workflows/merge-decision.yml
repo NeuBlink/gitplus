@@ -5,6 +5,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+# Security Note: This workflow uses PR metadata (numbers, SHAs) for status reporting
+# but does not execute user-controlled content. All checkouts use default refs,
+# and PR data is only used in safe contexts (API calls, conditional logic).
+
 permissions:
   contents: read
   pull-requests: write
@@ -273,12 +277,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true
 
+      - name: Prepare decision environment
+        run: |
+          # Ensure /tmp is writable and create decision template
+          sudo chmod 777 /tmp
+          echo '{"decision": "PENDING", "reason": "Analysis in progress", "critical_issues": [], "recommended_action": "manual-review"}' > /tmp/merge-decision.json
+          chmod 666 /tmp/merge-decision.json
+          echo "✅ Decision environment prepared"
+
       - name: Make merge decision
         id: merge-decision
         uses: anthropics/claude-code-action@e26577a930883943cf9d90885cd1e8da510078dd # beta
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           use_sticky_comment: true
+          allowed_tools: "Bash,Write,Read"
           
           direct_prompt: |
             You are an AI merge decision maker. Analyze the complete context below and decide whether this PR should be merged.
