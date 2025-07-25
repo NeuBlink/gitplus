@@ -1,0 +1,186 @@
+name: Release Please Post-Processing
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-package-lock:
+    # Only run on Release Please PRs with additional safety checks
+    if: |
+      github.event.pull_request.user.login == 'app/github-actions' &&
+      github.event.pull_request.user.type == 'Bot' &&
+      startsWith(github.event.pull_request.head.ref, 'release-please--') &&
+      github.event.pull_request.base.ref == 'main'
+    
+    runs-on: ubuntu-latest
+    environment: release-please
+    
+    steps:
+      - name: Validate Release Please PR
+        run: |
+          echo "🔍 Validating Release Please PR"
+          echo "PR Title: ${PR_TITLE}"
+          echo "PR Author: ${PR_AUTHOR}"
+          echo "PR Author Type: ${PR_AUTHOR_TYPE}"
+          echo "Head Branch: ${HEAD_BRANCH}"
+          echo "Base Branch: ${BASE_BRANCH}"
+          
+          # SECURITY NOTE: All user-controlled inputs (PR title, branch names) are safely
+          # passed through environment variables to prevent code injection attacks.
+          # This is the secure pattern recommended by GitHub Actions security guides.
+          
+          # Additional safety checks
+          if [ "${PR_AUTHOR}" != "app/github-actions" ]; then
+            echo "❌ Error: PR author is not app/github-actions"
+            exit 1
+          fi
+          
+          if [ "${PR_AUTHOR_TYPE}" != "Bot" ]; then
+            echo "❌ Error: PR author type is not Bot"
+            exit 1
+          fi
+          
+          if [ "${BASE_BRANCH}" != "main" ]; then
+            echo "❌ Error: PR base branch is not main"
+            exit 1
+          fi
+          
+          if [[ ! "${HEAD_BRANCH}" =~ ^release-please-- ]]; then
+            echo "❌ Error: PR head branch does not match release-please pattern"
+            exit 1
+          fi
+          
+          echo "✅ Release Please PR validation passed"
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+
+      - name: Checkout Release Please branch
+        uses: actions/checkout@v4
+        with:
+          # Use specific SHA to avoid ref manipulation
+          ref: ${{ github.event.pull_request.head.sha }}
+          # Use minimal permissions token
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Need fetch depth > 1 to compare with main branch
+          fetch-depth: 50
+          # Don't persist credentials
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Check if package.json version changed
+        id: version-check
+        run: |
+          echo "🔍 Checking if package.json version changed"
+          
+          # Get the version from the current branch (Release Please branch)
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          echo "Current version: $CURRENT_VERSION"
+          
+          # Get the version from main branch
+          git fetch origin main
+          MAIN_VERSION=$(git show origin/main:package.json | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf-8')).version")
+          echo "Main version: $MAIN_VERSION"
+          
+          if [ "$CURRENT_VERSION" != "$MAIN_VERSION" ]; then
+            echo "✅ Version changed from $MAIN_VERSION to $CURRENT_VERSION"
+            echo "version_changed=true" >> $GITHUB_OUTPUT
+            echo "old_version=$MAIN_VERSION" >> $GITHUB_OUTPUT
+            echo "new_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          else
+            echo "ℹ️ Version not changed"
+            echo "version_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update package-lock.json
+        if: steps.version-check.outputs.version_changed == 'true'
+        run: |
+          echo "🔄 Updating package-lock.json for version ${{ steps.version-check.outputs.new_version }}"
+          
+          # Remove existing node_modules and package-lock.json to ensure clean install
+          rm -rf node_modules package-lock.json
+          
+          # Install dependencies to generate new package-lock.json
+          npm install
+          
+          echo "✅ Generated new package-lock.json"
+
+      - name: Check for changes
+        if: steps.version-check.outputs.version_changed == 'true'
+        id: changes-check
+        run: |
+          if git diff --quiet package-lock.json; then
+            echo "ℹ️ No changes to package-lock.json"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "✅ package-lock.json has changes"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit updated package-lock.json
+        if: |
+          steps.version-check.outputs.version_changed == 'true' && 
+          steps.changes-check.outputs.has_changes == 'true'
+        run: |
+          echo "📝 Committing updated package-lock.json"
+          
+          # Configure git with bot identity
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          # Configure git to use token for authentication
+          git config url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+          
+          # Add and commit the updated package-lock.json
+          git add package-lock.json
+          git commit -m "chore: update package-lock.json for version ${NEW_VERSION}
+
+- Updated package-lock.json to match package.json version ${NEW_VERSION}
+- This ensures consistent dependency resolution across environments
+
+Co-authored-by: release-please[bot] <55107282+release-please[bot]@users.noreply.github.com>"
+          
+          # Push the changes back to the Release Please branch using safe reference
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${HEAD_BRANCH}"
+          
+          echo "✅ Successfully committed and pushed package-lock.json update"
+        env:
+          NEW_VERSION: ${{ steps.version-check.outputs.new_version }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+      - name: Add PR comment about package-lock update
+        if: |
+          steps.version-check.outputs.version_changed == 'true' && 
+          steps.changes-check.outputs.has_changes == 'true'
+        run: |
+          gh pr comment "${PR_NUMBER}" \
+            --repo ${{ github.repository }} \
+            --body "🤖 **Package Lock Updated**
+
+📦 **Version Change**: ${OLD_VERSION} → ${NEW_VERSION}  
+🔄 **Action**: Updated \`package-lock.json\` to match new version  
+✅ **Status**: Automatically committed to this Release Please PR  
+
+The package lock file has been updated to ensure consistent dependency resolution with the new version."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          OLD_VERSION: ${{ steps.version-check.outputs.old_version }}
+          NEW_VERSION: ${{ steps.version-check.outputs.new_version }}

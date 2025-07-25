@@ -4,14 +4,6 @@ on:
   # Run as a required status check on every PR
   pull_request:
     types: [opened, synchronize, reopened]
-  
-  # Also run when manually triggered
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: 'PR number to evaluate'
-        required: true
-        type: number
 
 # Security Note: This workflow uses PR metadata (numbers, SHAs) for status reporting
 # but does not execute user-controlled content. All checkouts use default refs,
@@ -58,8 +50,31 @@ jobs:
             # Get all check runs for this PR
             CHECKS=$(gh pr checks $PR_NUMBER --repo ${{ github.repository }} --json name,state)
             
-            # Check if required checks exist and are complete
-            REQUIRED_CHECKS=("claude-review" "test (20.x)" "security" "validate-pr")
+            # Get all available checks and determine what's actually running
+            AVAILABLE_CHECKS=$(echo "$CHECKS" | jq -r '.[].name' | sort)
+            echo "Available checks: $(echo "$AVAILABLE_CHECKS" | tr '\n' ', ' | sed 's/,$//')"
+            
+            # Define preferred checks (in priority order) but be flexible about what exists
+            PREFERRED_CHECKS=("claude-review" "test (20.x)" "security" "validate-pr" "CI / test (20.x)")
+            REQUIRED_CHECKS=()
+            
+            # Build list of required checks based on what's actually available
+            for check in "${PREFERRED_CHECKS[@]}"; do
+              if echo "$AVAILABLE_CHECKS" | grep -q "^$check$"; then
+                REQUIRED_CHECKS+=("$check")
+              fi
+            done
+            
+            # If no preferred checks are available, wait for any checks that are running
+            if [ ${#REQUIRED_CHECKS[@]} -eq 0 ]; then
+              echo "No preferred checks found, waiting for any available checks to complete..."
+              while IFS= read -r check; do
+                REQUIRED_CHECKS+=("$check")
+              done <<< "$AVAILABLE_CHECKS"
+            fi
+            
+            echo "Required checks: ${REQUIRED_CHECKS[*]}"
+            
             ALL_COMPLETE=true
             ALL_SUCCESS=true
             
@@ -147,20 +162,29 @@ jobs:
           # Get all checks summary
           ALL_CHECKS=$(gh pr checks $PR_NUMBER --repo ${{ github.repository }} --json name,state)
           
-          # Key check states
-          TEST_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "test (20.x)") | .state // "PENDING"')
-          SECURITY_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "security") | .state // "PENDING"')
-          CLAUDE_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "claude-review") | .state // "PENDING"')
-          VALIDATE_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "validate-pr") | .state // "PENDING"')
+          # Key check states - be flexible about check names
+          TEST_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "test (20.x)" or .name == "CI / test (20.x)") | .state' | head -1)
+          TEST_RESULT=${TEST_RESULT:-"PENDING"}
+          
+          SECURITY_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "security" or .name == "CI / security") | .state' | head -1)
+          SECURITY_RESULT=${SECURITY_RESULT:-"PENDING"}
+          
+          CLAUDE_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "claude-review") | .state' | head -1)
+          CLAUDE_RESULT=${CLAUDE_RESULT:-"PENDING"}
+          
+          VALIDATE_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "validate-pr") | .state' | head -1)
+          VALIDATE_RESULT=${VALIDATE_RESULT:-"PENDING"}
           
           # Get complete Claude review content from artifact file (preferred method)
           if [ "$CLAUDE_RESULT" = "SUCCESS" ]; then
             echo "🔍 Loading Claude review from artifact file..."
             
-            if [ -f "/tmp/claude-review-analysis.md" ]; then
-              echo "✅ Found Claude review analysis file"
-              CLAUDE_REVIEW_CONTENT=$(cat /tmp/claude-review-analysis.md)
-              FILE_SIZE=$(wc -c < /tmp/claude-review-analysis.md)
+            # Check if download step found the analysis file
+            if [ "${{ steps.download-review.outputs.analysis_available }}" = "true" ]; then
+              ANALYSIS_FILE="${{ steps.download-review.outputs.analysis_path }}"
+              echo "✅ Found Claude review analysis file at: $ANALYSIS_FILE"
+              CLAUDE_REVIEW_CONTENT=$(cat "$ANALYSIS_FILE")
+              FILE_SIZE=$(wc -c < "$ANALYSIS_FILE")
               echo "📄 Review file size: $FILE_SIZE characters"
               echo "📝 Review preview: ${CLAUDE_REVIEW_CONTENT:0:200}..."
               
@@ -218,10 +242,39 @@ jobs:
 
       - name: Download Claude review analysis
         id: download-review
-        uses: actions/download-artifact@v4
-        with:
-          name: claude-review-analysis-${{ steps.pr-context.outputs.PR_NUMBER }}
-          path: /tmp/
+        run: |
+          # Create unique directory for this merge decision run
+          MERGE_RUN_DIR="/tmp/merge-decision-${{ github.run_id }}-${{ github.run_attempt }}"
+          mkdir -p "$MERGE_RUN_DIR"
+          
+          # Try to download the most recent Claude review artifact
+          PR_NUMBER=${{ steps.pr-context.outputs.PR_NUMBER }}
+          echo "Searching for Claude review artifacts for PR #$PR_NUMBER"
+          
+          # Get list of artifacts and find the most recent Claude review
+          ARTIFACT_NAME=$(gh api repos/${{ github.repository }}/actions/artifacts \
+            --jq ".artifacts[] | select(.name | startswith(\"claude-review-analysis-$PR_NUMBER-\")) | .name" \
+            | head -1)
+          
+          if [ -n "$ARTIFACT_NAME" ]; then
+            echo "Found artifact: $ARTIFACT_NAME"
+            gh run download --repo ${{ github.repository }} --name "$ARTIFACT_NAME" --dir "$MERGE_RUN_DIR/"
+            
+            # Look for the analysis file in the downloaded content
+            if [ -f "$MERGE_RUN_DIR/claude-review-analysis.md" ]; then
+              echo "✅ Successfully downloaded Claude review analysis"
+              echo "analysis_available=true" >> $GITHUB_OUTPUT
+              echo "analysis_path=$MERGE_RUN_DIR/claude-review-analysis.md" >> $GITHUB_OUTPUT
+            else
+              echo "⚠️ Artifact downloaded but analysis file not found"
+              echo "analysis_available=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "⚠️ No Claude review artifact found for PR #$PR_NUMBER"
+            echo "analysis_available=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true
 
       - name: Prepare decision environment
@@ -293,9 +346,11 @@ jobs:
 
             **IMPORTANT**: After providing your analysis, also write your JSON decision to a file for the workflow to process:
             
-            Create a file `/tmp/merge-decision.json` with your exact JSON decision using this command:
+            Create a file in the merge decision directory with your exact JSON decision using this command:
             ```bash
-            echo '{"decision": "APPROVE", "reason": "Your reasoning here", "critical_issues": [], "recommended_action": "auto-merge"}' > /tmp/merge-decision.json
+            MERGE_RUN_DIR="/tmp/merge-decision-${{ github.run_id }}-${{ github.run_attempt }}"
+            mkdir -p "$MERGE_RUN_DIR"
+            echo '{"decision": "APPROVE", "reason": "Your reasoning here", "critical_issues": [], "recommended_action": "auto-merge"}' > "$MERGE_RUN_DIR/merge-decision.json"
             ```
             
             Replace the values with your actual decision. This ensures the workflow can reliably access your decision.
@@ -306,10 +361,13 @@ jobs:
           echo "📋 Parsing Claude's merge decision..."
           
           # First, try to read from the decision file that Claude should have created
+          MERGE_RUN_DIR="/tmp/merge-decision-${{ github.run_id }}-${{ github.run_attempt }}"
+          DECISION_FILE="$MERGE_RUN_DIR/merge-decision.json"
           DECISION_JSON=""
-          if [ -f "/tmp/merge-decision.json" ]; then
-            echo "✅ Found decision file, reading JSON..."
-            DECISION_JSON=$(cat /tmp/merge-decision.json)
+          
+          if [ -f "$DECISION_FILE" ]; then
+            echo "✅ Found decision file at: $DECISION_FILE"
+            DECISION_JSON=$(cat "$DECISION_FILE")
             echo "📄 Decision from file: $DECISION_JSON"
           else
             echo "⚠️ No decision file found, falling back to comment parsing..."

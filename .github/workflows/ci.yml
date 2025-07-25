@@ -9,6 +9,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     
     strategy:
       matrix:
@@ -64,6 +66,8 @@ jobs:
 
   security:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -85,6 +89,8 @@ jobs:
 
   compatibility:
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     
     strategy:
       matrix:

@@ -2,22 +2,11 @@ name: Claude Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
+    types: [opened, synchronize, reopened]
+    # Run on all PR types - no path restrictions to ensure workflow and infrastructure changes are reviewed
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
-    
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -54,8 +43,12 @@ jobs:
             **IMPORTANT**: After completing your review, save your COMPLETE review output to a file:
             
             ```bash
+            # Create unique directory for this workflow run
+            RUN_DIR="/tmp/claude-review-${{ github.run_id }}-${{ github.run_attempt }}"
+            mkdir -p "$RUN_DIR"
+            
             # Save your entire review output to file (copy everything you just wrote above)
-            cat > /tmp/claude-review-analysis.md << 'EOF'
+            cat > "$RUN_DIR/claude-review-analysis.md" << 'EOF'
             [PASTE YOUR COMPLETE REVIEW OUTPUT HERE - INCLUDING ALL DETAILS, ANALYSIS, FINDINGS, RECOMMENDATIONS, EVERYTHING YOU WROTE ABOVE]
             EOF
             ```
@@ -69,8 +62,8 @@ jobs:
         if: always()  # Upload even if review has issues
         uses: actions/upload-artifact@v4
         with:
-          name: claude-review-analysis-${{ github.event.pull_request.number }}
-          path: /tmp/claude-review-analysis.md
+          name: claude-review-analysis-${{ github.event.pull_request.number }}-${{ github.run_id }}
+          path: /tmp/claude-review-${{ github.run_id }}-${{ github.run_attempt }}/claude-review-analysis.md
           retention-days: 7
           
           # Security Note: All workflow inputs are properly sanitized and do not use

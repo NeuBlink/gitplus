@@ -95,12 +95,13 @@ export class PlatformManager {
    * Create GitHub Pull Request using gh CLI
    */
   private async createGitHubPR(request: PRRequest): Promise<PRResponse> {
-    const escapedTitle = request.title.replace(/"/g, '\\"');
+    // Properly escape shell metacharacters
+    const escapedTitle = this.escapeShellString(request.title);
     
     // Create temporary markdown file for the PR description
     const tempFile = this.createTempMarkdownFile(request.body);
     
-    let command = `gh pr create --title "${escapedTitle}" --body-file "${tempFile}"`;
+    let command = `gh pr create --title ${escapedTitle} --body-file "${tempFile}"`;
     
     if (request.baseBranch) {
       command += ` --base ${request.baseBranch}`;
@@ -144,12 +145,13 @@ export class PlatformManager {
    * Create GitLab Merge Request using glab CLI
    */
   private async createGitLabMR(request: PRRequest): Promise<PRResponse> {
-    const escapedTitle = request.title.replace(/"/g, '\\"');
+    // Properly escape shell metacharacters
+    const escapedTitle = this.escapeShellString(request.title);
     
     // Create temporary markdown file for the MR description
     const tempFile = this.createTempMarkdownFile(request.body);
     
-    let command = `glab mr create --title "${escapedTitle}" --description-file "${tempFile}"`;
+    let command = `glab mr create --title ${escapedTitle} --description-file "${tempFile}"`;
     
     if (request.baseBranch) {
       command += ` --target-branch ${request.baseBranch}`;
@@ -183,6 +185,16 @@ export class PlatformManager {
       // Clean up temporary file
       this.cleanupTempFile(tempFile);
     }
+  }
+
+  /**
+   * Properly escape a string for shell execution
+   */
+  private escapeShellString(str: string): string {
+    // Use single quotes to avoid most shell interpretation
+    // Escape any single quotes in the string by ending the quoted string,
+    // adding an escaped single quote, and starting a new quoted string
+    return `'${str.replace(/'/g, "'\"'\"'")}'`;
   }
 
   /**
