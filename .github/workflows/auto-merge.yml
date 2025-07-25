@@ -153,13 +153,7 @@ jobs:
             
             # Add a comment about the auto-merge
             gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
-              --body "🤖 **Auto-merge enabled** by Claude AI merge decision
-
-✅ **Merge Decision**: Approved  
-🚀 **Action**: Auto-merge activated  
-📋 **Method**: $MERGE_METHOD  
-
-This PR will be automatically merged once all required status checks pass."
+              --body "🤖 **Auto-merge enabled** by Claude AI merge decision\n\n✅ **Merge Decision**: Approved\n🚀 **Action**: Auto-merge activated\n📋 **Method**: \$MERGE_METHOD\n\nThis PR will be automatically merged once all required status checks pass."
             
           else
             echo "❌ Failed to enable auto-merge for PR #$PR_NUMBER"
@@ -170,13 +164,7 @@ This PR will be automatically merged once all required status checks pass."
               echo "✅ Successfully merged PR #$PR_NUMBER directly"
               
               gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
-                --body "🤖 **PR Merged** by Claude AI automation
-
-✅ **Merge Decision**: Approved  
-🚀 **Action**: Direct merge completed  
-📋 **Method**: $MERGE_METHOD  
-
-This PR has been automatically merged based on Claude's analysis."
+                --body "🤖 **PR Merged** by Claude AI automation\n\n✅ **Merge Decision**: Approved\n🚀 **Action**: Direct merge completed\n📋 **Method**: \$MERGE_METHOD\n\nThis PR has been automatically merged based on Claude's analysis."
             else
               echo "❌ Direct merge also failed for PR #$PR_NUMBER"
               exit 1
@@ -193,12 +181,6 @@ This PR has been automatically merged based on Claude's analysis."
           
           # Add comment about the failure
           gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
-            --body "🤖 **Auto-merge Failed**
-
-❌ **Issue**: Automatic merge could not be completed  
-🔍 **Next Steps**: Manual review and merge required  
-📋 **Reason**: Check the auto-merge workflow logs for details  
-
-Despite Claude AI approving this PR, automatic merging encountered an issue. Please review and merge manually if appropriate." || true
+            --body "🤖 **Auto-merge Failed**\\n\\n❌ **Issue**: Automatic merge could not be completed\\n🔍 **Next Steps**: Manual review and merge required\\n📋 **Reason**: Check the auto-merge workflow logs for details\\n\\nDespite Claude AI approving this PR, automatic merging encountered an issue. Please review and merge manually if appropriate." || true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
