@@ -224,8 +224,8 @@ jobs:
         if: always()  # Upload even if review has issues
         uses: actions/upload-artifact@v4
         with:
-          name: claude-review-analysis-${{ env.PR_NUMBER }}-${{ env.GITHUB_RUN_ID }}
-          path: /tmp/claude-review-${{ env.GITHUB_RUN_ID }}-${{ env.GITHUB_RUN_ATTEMPT }}/claude-review-analysis.md
+          name: claude-review-analysis-${{ github.event.pull_request.number }}-${{ github.run_id }}
+          path: /tmp/claude-review-${{ github.run_id }}-${{ github.run_attempt }}/claude-review-analysis.md
           retention-days: 7
           
           # Security Note: All workflow inputs are properly sanitized and do not use
