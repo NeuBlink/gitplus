@@ -1,27 +1,27 @@
-# Gitplus - AI-Powered Git Automation for Claude Code
+# GitPlus - AI-Powered Git Automation for Claude Code
 
 [![CI](https://github.com/neublink/gitplus/workflows/CI/badge.svg)](https://github.com/neublink/gitplus/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D16.0.0-brightgreen)](https://nodejs.org/)
 
-Gitplus is a Model Context Protocol (MCP) server that brings AI-powered git automation directly to Claude Code. Streamline your git workflow with intelligent commit messages, branch suggestions, and automated pull request creation.
+GitPlus is a Model Context Protocol (MCP) server that brings AI-powered git automation directly to Claude Code. It provides a simplified, intelligent interface with just 3 essential tools that handle complete git workflows automatically.
 
 ## Features
 
 🚀 **Complete Git Workflows**: One-command ship from changes to PR  
 💻 **Smart Commits**: AI-generated conventional commit messages with strict spec compliance  
 🔍 **Change Analysis**: Intelligent analysis of repository changes with breaking change detection  
-💡 **AI Suggestions**: Smart suggestions for branches, commits, and PRs following best practices  
-📝 **PR Drafting**: Auto-generated pull request titles and descriptions  
-📊 **Git Status**: Enhanced repository status with platform detection  
+🤖 **AI-Powered**: Uses Claude AI for commit messages, branch names, and conflict resolution  
+📝 **PR Automation**: Auto-generated pull request titles and descriptions  
+📊 **Repository Status**: Enhanced repository status with platform detection  
 ✅ **Commit Validation**: Real-time validation against Conventional Commits specification  
-🔧 **Auto-detection**: Automatic type/scope detection from file changes and diffs
+🌐 **Multi-Platform**: Supports GitHub, GitLab, and local repositories
 
 ## Quick Start
 
-### Published Package Installation
+### Install as MCP Server for Claude Code
 
-Install gitplus as an MCP server in Claude Code:
+Install GitPlus as an MCP server in Claude Code:
 
 ```bash
 claude mcp add gitplus -- npx @neublink/gitplus@latest --mcp
@@ -29,129 +29,48 @@ claude mcp add gitplus -- npx @neublink/gitplus@latest --mcp
 
 The `--mcp` flag ensures the package starts in MCP server mode for Claude Code integration.
 
-## For Claude Code Users
+### Configuration for Claude Code
 
-When using GitPlus with Claude Code, add this configuration to your `CLAUDE.md` file:
+Add this configuration to your `CLAUDE.md` file to optimize GitPlus usage:
 
 ```markdown
 ## Git Operations
 Always use the GitPlus MCP server for ALL git operations. Never use manual git commands.
 
 ### Primary Command
-- `mcp__gitplus__ship` - Commits, pushes, and creates PR automatically
-  - No need to specify commit messages - AI generates them
-  - No need to manage branches - AI creates them
-  - Conflicts are resolved automatically
+- `mcp__gitplus__ship` - Complete git workflow: analyze → commit → push → create PR
+  - AI generates commit messages automatically
+  - AI creates appropriate branch names
+  - AI resolves conflicts when possible
+  - Creates pull requests with generated titles and descriptions
 
-### Usage
+### Usage Pattern
 When ready to ship changes:
-1. Simply call: `mcp__gitplus__ship` with `repoPath`
+1. Simply call: `mcp__gitplus__ship` with absolute `repoPath`
 2. GitPlus handles everything else automatically
 
 ### Additional Commands
-- `mcp__gitplus__status` - Get repository status
-- `mcp__gitplus__info` - Get server information
+- `mcp__gitplus__status` - Get enhanced repository status
+- `mcp__gitplus__info` - Get server information and capabilities
 ```
 
 GitPlus automatically:
-- ✅ Generates commit messages based on your changes
-- ✅ Creates appropriate branch names
+- ✅ Generates conventional commit messages based on your changes
+- ✅ Creates appropriate branch names from change analysis
 - ✅ Detects and resolves merge conflicts with AI
 - ✅ Creates pull requests with proper titles and descriptions
 - ✅ Ensures PRs are always mergeable
 
-### Local Development Installation
+## Available MCP Tools
 
-#### Prerequisites
+GitPlus has been intentionally simplified to 3 essential tools that provide maximum automation with minimal decision-making overhead:
 
-Before installing gitplus locally, ensure you have:
-
-- **Node.js 16+**: Required runtime environment
-- **Git**: For repository management
-- **Claude CLI**: Install and authenticate with `claude auth login`
-  ```bash
-  # Install Claude CLI (if not already installed)
-  npm install -g @anthropic-ai/claude-code
-  
-  # Verify Claude CLI is available and authenticated
-  claude --version
-  claude auth login
-  ```
-- **Platform CLIs** (optional for enhanced functionality):
-  - **GitHub CLI**: `gh auth login` for GitHub repository features
-  - **GitLab CLI**: `glab auth login` for GitLab repository features
-
-**Important**: AI functionality via Claude CLI is mandatory - gitplus will fail if Claude CLI is not available or properly authenticated.
-
-#### Installation Steps
-
-For development or testing before publication:
-
-```bash
-# Clone and build the project
-git clone https://github.com/neublink/gitplus.git
-cd gitplus
-npm install
-npm run build
-
-# Fix file permissions (required after build)
-chmod +x dist/main.js dist/cli.js dist/index.js
-
-# Install CLI globally for command line usage
-npm link
-
-# Add to Claude Code as MCP server (using linked command)
-claude mcp add gitplus-local -- node $(pwd)/dist/main.js --mcp
-```
-
-**Note**: The `gp` alias may conflict with existing shell aliases for `git push`. Use the `gitplus` command if `gp` doesn't work.
-
-### Verify Installation
-
-After setup, verify both interfaces work:
-
-**CLI Commands:**
-```bash
-gitplus --help          # Should show help menu
-gitplus status          # Should show repository status
-```
-
-**MCP Server:**
-```bash
-claude /mcp             # Should show gitplus-local as ✔ connected
-```
-
-Now you can use gitplus tools in Claude Code conversations and CLI commands globally!
-
-### Usage in Claude Code
-
-Once installed, you can use gitplus tools directly in Claude Code:
-
-**Ship your changes:**
-> "Ship my current changes to a new PR"
-
-**Create a smart commit:**
-> "Commit my staged changes with an AI-generated message"
-
-**Analyze repository:**
-> "Analyze the changes in my repository and provide insights"
-
-**Get suggestions:**
-> "Suggest a branch name for my authentication feature"
-
-**Draft a PR:**
-> "Generate a PR description for my recent commits"
-
-**Check status:**
-> "Show me the current git status with detailed information"
-
-## Available Tools
-
-### 🚀 `ship`
-**Primary Command** - Complete git workflow: analyze → commit → push → create PR
+### 🚀 `ship` - Complete Git Workflow
+**Primary Command** - Handles the complete workflow: analyze → commit → push → create PR
 
 The ship command intelligently handles your entire git workflow:
-- **Generates commit messages automatically** using AI analysis of your changes
+- **Analyzes changes** using AI to understand the nature and impact of modifications
+- **Generates commit messages** automatically using AI analysis of your changes
 - **Creates branch names** based on the nature of your changes
 - **Resolves merge conflicts** using AI when they occur
 - **Creates pull requests** with proper titles and descriptions
@@ -162,18 +81,55 @@ The ship command intelligently handles your entire git workflow:
 - **draft**: Create PR as draft (default: false)
 - **dryRun**: Preview what would be done without executing (default: false)
 
-### 📊 `status`
+**Example Usage in Claude Code:**
+> "Ship my current changes to a new PR"
+
+### 📊 `status` - Enhanced Repository Status
 Get current repository status with platform detection and actionable insights
+
+**Parameters:**
 - **repoPath**: Full absolute path to the git repository *required*
 - **verbose**: Include detailed status information (default: false)
 
-### ℹ️ `info`
+**Example Usage in Claude Code:**
+> "Show me the current git status with detailed information"
+
+### ℹ️ `info` - Server Information
 Get comprehensive information about GitPlus MCP server capabilities and usage
+
+**Parameters:**
 - **repoPath**: Full absolute path to the git repository (optional - provides repo-specific info if given)
 
-## Conventional Commits
+**Example Usage in Claude Code:**
+> "Tell me about GitPlus capabilities and tools"
 
-Gitplus follows the [Conventional Commits](https://www.conventionalcommits.org/) specification strictly. Every commit message is:
+## Architecture
+
+GitPlus follows a **simplified MCP-first architecture** designed around intelligent automation:
+
+### Core Design Philosophy
+- **3 Essential Tools**: Reduced from 14+ CLI commands to 3 MCP tools that handle everything
+- **AI-Powered Intelligence**: Uses Claude AI for all decision-making (commit messages, branch names, conflict resolution)
+- **Complete Workflows**: Each tool provides complete functionality rather than partial operations
+- **Zero Configuration**: Works out-of-the-box with sensible defaults
+
+### Technology Stack
+- **TypeScript**: Type-safe development with strict compilation
+- **MCP SDK**: Official Model Context Protocol SDK for Claude Code integration
+- **Zod**: Runtime type validation for inputs and outputs
+- **Node.js**: Cross-platform compatibility (Node 16+)
+- **Conventional Commits**: Strict adherence to commit message standards
+
+### Key Components
+- `src/mcp/toolDefinitions.ts` - Defines the 3 MCP tools exposed to Claude
+- `src/mcp/toolHandler.ts` - Implements handlers for the 3 tools
+- `src/mcp/server.ts` - MCP server setup with descriptive metadata
+- `src/git/client.ts` - Core git operations wrapper
+- `src/ai/service.ts` - AI integration for intelligent analysis
+
+## AI-Powered Conventional Commits
+
+GitPlus follows the [Conventional Commits](https://www.conventionalcommits.org/) specification strictly. Every commit message is:
 
 ### ✅ **Validated** against the specification
 - Format: `type(scope): description`
@@ -196,61 +152,76 @@ refactor(utils): extract validation logic   # Code restructuring
 - **Breaking changes**: Automatically detects API changes and adds `!` notation
 - **Validation feedback**: Real-time validation with helpful error messages
 
-### Examples
+## Platform Support
 
-#### Feature with scope
-```
-feat(auth): add two-factor authentication
+- ✅ **Local Git**: Works with any git repository
+- ✅ **GitHub**: Full platform detection and PR creation via GitHub CLI
+- ✅ **GitLab**: Full platform detection and MR creation via GitLab CLI
+- ✅ **Auto-detection**: Automatically detects platform from remote URL
 
-Implements TOTP-based 2FA with QR code generation
-and backup codes for account recovery.
-
-Closes #156
-```
-
-#### Breaking change
-```
-feat(api)!: change user data structure
-
-BREAKING CHANGE: User objects now use `userId` instead of `id`.
-Migration guide available in docs/migration.md
-```
-
-#### Simple fix
-```
-fix(validation): handle empty email addresses
-```
-
-## Architecture
-
-Gitplus is built with:
-- **TypeScript**: Type-safe development
-- **MCP SDK**: Official Model Context Protocol SDK
-- **Zod**: Runtime type validation
-- **Node.js**: Cross-platform compatibility
-- **Conventional Commits**: Strict adherence to commit message standards
-
-## Development Setup
-
-### Prerequisites
-
-Before developing with gitplus, ensure you have:
+## Prerequisites
 
 - **Node.js 16+**: Required runtime environment
+- **Git**: For repository management
 - **Claude CLI**: Install and authenticate with `claude auth login`
   ```bash
+  # Install Claude CLI (if not already installed)
+  npm install -g @anthropic-ai/claude-code
+  
   # Verify Claude CLI is available and authenticated
   claude --version
-  claude -p "test" --output-format json --model sonnet
+  claude auth login
   ```
-- **Git repository**: A local git repository with changes to test
 - **Platform CLIs** (optional for enhanced functionality):
   - **GitHub CLI**: `gh auth login` for GitHub repository features
   - **GitLab CLI**: `glab auth login` for GitLab repository features
 
-### Environment Variables
+**Important**: AI functionality via Claude CLI is mandatory - GitPlus will fail if Claude CLI is not available or properly authenticated.
 
-Configure gitplus behavior with these environment variables:
+## Local Development
+
+For development or testing before publication:
+
+```bash
+# Clone and build the project
+git clone https://github.com/neublink/gitplus.git
+cd gitplus
+npm install
+npm run build
+
+# Fix file permissions (required after build)
+chmod +x dist/main.js dist/cli.js dist/index.js
+
+# Install CLI globally for command line usage (optional)
+npm link
+
+# Add to Claude Code as MCP server (using local build)
+claude mcp add gitplus-local -- node $(pwd)/dist/main.js --mcp
+```
+
+### Verify Installation
+
+After setup, verify the MCP server works:
+
+```bash
+claude /mcp             # Should show gitplus-local as ✔ connected
+```
+
+Now you can use GitPlus tools directly in Claude Code conversations!
+
+## CLI Interface (Optional)
+
+GitPlus also provides a CLI interface for direct command-line usage. The CLI offers additional commands beyond the 3 MCP tools for advanced git operations.
+
+**Note**: The CLI is secondary to the MCP interface. For Claude Code users, the MCP tools (`ship`, `status`, `info`) are the primary interface.
+
+For detailed CLI documentation, see [CLI.md](CLI.md).
+
+## Configuration
+
+GitPlus works out-of-the-box with sensible defaults. Advanced configuration options:
+
+### Environment Variables
 
 ```bash
 # AI Configuration
@@ -259,192 +230,20 @@ export GITPLUS_TIMEOUT="60000"                   # Timeout in milliseconds (defa
 export GITPLUS_CLAUDE_COMMAND="claude"           # Claude CLI command path (default: claude)
 ```
 
-**Important**: AI is mandatory - gitplus will fail immediately if Claude CLI is not available or working.
-
-### Development Workflow
-
-```bash
-# Clone the repository
-git clone https://github.com/neublink/gitplus.git
-cd gitplus
-
-# Install dependencies
-npm install
-
-# Build the project
-npm run build
-
-# Link CLI globally for testing
-npm link
-
-# Add to Claude Code as MCP server (local development)
-claude mcp add gitplus-local -- node $(pwd)/dist/main.js --mcp
-```
-
-After setup:
-- Both `gitplus` and `gp` CLI commands are available globally
-- Gitplus tools are available in Claude Code conversations
-- Any changes require `npm run build` to rebuild
-
-### CLI Commands
-
-After linking (`npm link`), use gitplus commands in any git repository:
-
-```bash
-# Navigate to your git repository
-cd /path/to/your/git/repo
-
-# Check repository status
-gitplus status --verbose
-gitplus status  # Or use 'gp' if it's not aliased to 'git push'
-
-# Analyze changes with AI
-gitplus analyze --diff
-gitplus analyze  # Get AI insights on your changes
-
-# Generate AI commit message (dry run)
-gitplus commit --dry-run
-gitplus commit -d  # Preview AI-generated commit
-
-# Create actual commit with AI message
-gitplus commit --all
-gitplus commit -a  # Stage all changes and commit
-
-# Get AI suggestions
-gitplus suggest branch    # AI branch name suggestion
-gitplus suggest commit    # AI commit message suggestion
-gitplus suggest pr_title  # AI PR title suggestion
-
-# Complete ship workflow (dry run)
-gitplus ship --dry-run    # Preview full workflow
-gitplus ship --no-pr     # Commit and push without PR
-
-# Synchronize with remote
-gitplus sync --strategy merge    # Merge remote changes
-gitplus sync --strategy rebase   # Rebase on remote changes
-
-# Manage stash operations
-gitplus stash push -m "WIP: feature work"  # Create stash
-gitplus stash list                         # List all stashes
-gitplus stash pop                         # Apply and remove latest stash
-
-# Safe repository resets
-gitplus reset mixed               # Reset index, keep working directory
-gitplus reset hard --confirm     # Hard reset (requires confirmation)
-
-# Interactive rebasing
-gitplus rebase main               # Rebase current branch onto main
-gitplus rebase --action continue # Continue interrupted rebase
-
-# Recover lost work
-gitplus recover show-reflog       # Show recent reflog entries
-gitplus recover recover-commit --commit abc123  # Recover specific commit
-
-# Repository validation
-gitplus validate --deep           # Deep repository health check
-gitplus validate --fix           # Attempt to fix issues automatically
-```
-
-### Available Commands
-
-| Command | Alias | Description |
-|---------|-------|-------------|
-| `gitplus commit` | `gp commit`* | AI-powered conventional commits |
-| `gitplus ship` | `gp ship`* | Complete workflow: commit → push → PR |
-| `gitplus analyze` | `gp analyze`* | AI analysis of repository changes |
-| `gitplus suggest <type>` | `gp suggest <type>`* | AI suggestions for branch/commit/PR |
-| `gitplus status` | `gp status`* | Enhanced git status with platform detection |
-| `gitplus sync` | `gp sync`* | Synchronize with remote repository |
-| `gitplus stash <action>` | `gp stash <action>`* | Manage git stash operations |
-| `gitplus reset <mode>` | `gp reset <mode>`* | Reset repository state safely |
-| `gitplus rebase [onto]` | `gp rebase [onto]`* | Interactive and automatic rebasing |
-| `gitplus recover <action>` | `gp recover <action>`* | Recover lost commits using reflog |
-| `gitplus validate` | `gp validate`* | Validate repository health and integrity |
-
-*Note: `gp` alias may conflict with existing shell aliases for `git push`
-
-Note: The CLI also supports all MCP tools when built and run locally.
-
-### Testing AI Integration
-
-The AI integration requires Claude CLI to be installed and authenticated. Test the AI functionality:
-
-```bash
-# Verify AI is working
-claude --version  # Should show Claude CLI version
-
-# Test AI with sample repository
-cd /tmp && mkdir test-repo && cd test-repo
-git init
-echo "console.log('Hello World');" > app.js
-git add app.js
-
-# Test AI commit generation
-gitplus commit --dry-run  # Should generate intelligent commit message
-
-# If AI fails, gitplus falls back to rule-based analysis
-```
-
-### Development Commands
-
-```bash
-# Run in development mode with auto-reload
-npm run dev
-
-# Test MCP server directly  
-npm run start
-
-# Run tests
-npm test
-
-# Run full validation (typecheck + tests)
-npm run validate
-
-# Clean and rebuild
-npm run clean && npm run build
-```
-
-## Configuration
-
-Gitplus works out-of-the-box with sensible defaults. For advanced users, configuration options will be added in future versions.
-
 ## Troubleshooting
 
 ### Common Issues
 
-#### `gp` Command Not Working
-**Issue**: `gp` command shows `git push` instead of gitplus commands.  
-**Solution**: Your shell has `gp` aliased to `git push`. Use `gitplus` instead of `gp` for all commands.
-
 #### MCP Server Connection Failed
-**Issue**: Claude Code shows gitplus-local as ✘ failed.  
+**Issue**: Claude Code shows gitplus as ✘ failed.  
 **Solutions**:
 1. Ensure files are executable: `chmod +x dist/main.js dist/cli.js dist/index.js`
 2. Rebuild the project: `npm run build`
 3. Remove and re-add MCP server:
    ```bash
-   claude mcp remove gitplus-local
-   claude mcp add gitplus-local -- node $(pwd)/dist/main.js --mcp
+   claude mcp remove gitplus
+   claude mcp add gitplus -- npx @neublink/gitplus@latest --mcp
    ```
-
-#### CLI Commands Not Found
-**Issue**: `gitplus: command not found`  
-**Solutions**:
-1. Ensure npm link was successful: `npm link`
-2. Check if command exists: `which gitplus`
-3. Rebuild and relink:
-   ```bash
-   npm run build
-   chmod +x dist/main.js dist/cli.js dist/index.js
-   npm link
-   ```
-
-#### Permission Denied Errors
-**Issue**: `permission denied: /path/to/dist/main.js`  
-**Solution**: Files need execute permissions after build:
-```bash
-chmod +x dist/main.js dist/cli.js dist/index.js
-```
 
 #### AI Integration Not Working
 **Issue**: Commands fail with Claude CLI errors.  
@@ -459,16 +258,52 @@ chmod +x dist/main.js dist/cli.js dist/index.js
    claude -p "test" --output-format json --model sonnet
    ```
 
-## Platform Support
+#### Permission Denied Errors
+**Issue**: `permission denied: /path/to/dist/main.js`  
+**Solution**: Files need execute permissions after build:
+```bash
+chmod +x dist/main.js dist/cli.js dist/index.js
+```
 
-- ✅ **Local Git**: Works with any git repository
-- ✅ **GitHub**: Full platform detection and PR creation via GitHub CLI
-- ✅ **GitLab**: Full platform detection and MR creation via GitLab CLI
-- ✅ **Auto-detection**: Automatically detects platform from remote URL
+## Development
+
+### Testing
+
+```bash
+# Run all tests
+npm test
+
+# Run with coverage
+npm run test:coverage
+
+# Run validation (typecheck + tests)  
+npm run validate
+```
+
+### Building
+
+```bash
+# Build TypeScript
+npm run build
+
+# Watch mode for development
+npm run dev
+```
+
+### Using GitPlus for Development
+
+**Important: Always use GitPlus MCP server for ALL git operations on this repository. Never use manual git commands.**
+
+When you've made changes to the GitPlus codebase:
+1. Make your code changes
+2. Run tests: `npm test`
+3. Check status: Use `mcp__gitplus__status` with `repoPath` and `verbose: true`
+4. Ship changes: Use `mcp__gitplus__ship` with `repoPath`
+
+GitPlus will handle all git operations intelligently, ensuring proper commit messages and workflow.
 
 ## Publishing & Release
 
-### Manual Publishing
 Use the GitHub Actions workflow to publish:
 
 1. **Go to Actions tab** in GitHub repository
@@ -480,15 +315,6 @@ Use the GitHub Actions workflow to publish:
    - Bump version and create git tag
    - Publish to NPM registry
    - Create GitHub release with changelog
-   - Verify published package
-
-### Automated Release (Tag-based)
-Alternatively, create a release tag:
-```bash
-git tag v1.x.x && git push origin v1.x.x
-```
-
-This triggers the existing release workflow for automated publishing.
 
 ## Contributing
 
@@ -517,7 +343,6 @@ npm run build
 
 # Link for local testing
 npm link
-gitplus --help
 
 # Add to Claude Code for MCP testing
 claude mcp add gitplus-local -- node $(pwd)/dist/main.js --mcp
