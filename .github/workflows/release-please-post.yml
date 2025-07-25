@@ -110,7 +110,7 @@ jobs:
       - name: Update package-lock.json
         if: steps.version-check.outputs.version_changed == 'true'
         run: |
-          echo "🔄 Updating package-lock.json for version ${{ steps.version-check.outputs.new_version }}"
+          echo "🔄 Updating package-lock.json for version ${NEW_VERSION}"
           
           # Remove existing node_modules and package-lock.json to ensure clean install
           rm -rf node_modules package-lock.json
@@ -166,10 +166,11 @@ jobs:
           steps.changes-check.outputs.has_changes == 'true'
         run: |
           gh pr comment "${PR_NUMBER}" \
-            --repo ${{ github.repository }} \
+            --repo "${GITHUB_REPOSITORY}" \
             --body "🤖 **Package Lock Updated**\\n\\n📦 **Version Change**: \${OLD_VERSION} → \${NEW_VERSION}\\n🔄 **Action**: Updated \\\`package-lock.json\\\` to match new version\\n✅ **Status**: Automatically committed to this Release Please PR\\n\\nThe package lock file has been updated to ensure consistent dependency resolution with the new version."
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           OLD_VERSION: ${{ steps.version-check.outputs.old_version }}
           NEW_VERSION: ${{ steps.version-check.outputs.new_version }}

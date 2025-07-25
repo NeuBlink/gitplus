@@ -51,7 +51,6 @@ jobs:
       - name: Wait for other checks to complete
         id: check-status
         run: |
-          PR_NUMBER=${{ steps.get-pr.outputs.pr_number }}
           echo "Checking status of PR #$PR_NUMBER"
           
           # Wait up to 30 minutes for checks to complete
@@ -126,6 +125,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.get-pr.outputs.pr_number }}
 
   merge-decision:
     runs-on: ubuntu-latest
@@ -342,8 +342,6 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ steps.pr-info.outputs.pr_number }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ steps.pr-context.outputs.PR_NUMBER }}
           AUTHOR: ${{ steps.pr-context.outputs.PR_AUTHOR }}
           HEAD_BRANCH: ${{ steps.pr-context.outputs.HEAD_BRANCH }}
@@ -403,8 +401,6 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ steps.pr-info.outputs.pr_number }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ steps.pr-context.outputs.PR_NUMBER }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_RUN_ID: ${{ github.run_id }}
@@ -543,7 +539,7 @@ jobs:
           fi
           
           # Create decision file
-          MERGE_RUN_DIR="/tmp/merge-decision-${{ github.run_id }}-${{ github.run_attempt }}"
+          MERGE_RUN_DIR="/tmp/merge-decision-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "$MERGE_RUN_DIR"
           
           cat > "$MERGE_RUN_DIR/merge-decision.json" << EOF
@@ -559,8 +555,8 @@ jobs:
           echo "📝 Reason: $REASON"
           
           # Add PR comment
-          gh pr comment ${{ steps.pr-context.outputs.PR_NUMBER }} \
-            --repo ${{ github.repository }} \
+          gh pr comment "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
             --body "🤖 **Automated Release Decision**
 
           **Decision**: $DECISION  
@@ -581,6 +577,10 @@ jobs:
           This automated decision was made without external review as this is a validated Release Please PR."
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr-context.outputs.PR_NUMBER }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
 
       - name: Make merge decision (Regular PR)
         id: merge-decision
@@ -698,7 +698,7 @@ jobs:
             
             Create a file in the merge decision directory with your exact JSON decision using this command:
             ```bash
-            MERGE_RUN_DIR="/tmp/merge-decision-${{ github.run_id }}-${{ github.run_attempt }}"
+            MERGE_RUN_DIR="/tmp/merge-decision-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             mkdir -p "$MERGE_RUN_DIR"
             echo '{"decision": "MANUAL_APPROVAL", "reason": "Good code quality but needs human review", "critical_issues": [], "recommended_action": "manual-review"}' > "$MERGE_RUN_DIR/merge-decision.json"
             ```
@@ -711,7 +711,7 @@ jobs:
           echo "📋 Parsing merge decision..."
           
           # First, try to read from the decision file (works for both Release Please and Regular PRs)
-          MERGE_RUN_DIR="/tmp/merge-decision-${{ github.run_id }}-${{ github.run_attempt }}"
+          MERGE_RUN_DIR="/tmp/merge-decision-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           DECISION_FILE="$MERGE_RUN_DIR/merge-decision.json"
           DECISION_JSON=""
           
@@ -719,23 +719,23 @@ jobs:
             echo "✅ Found decision file at: $DECISION_FILE"
             DECISION_JSON=$(cat "$DECISION_FILE")
             echo "📄 Decision from file: $DECISION_JSON"
-          elif [ "${{ steps.pr-context.outputs.IS_RELEASE_PLEASE }}" = "true" ]; then
+          elif [ "$IS_RELEASE_PLEASE" = "true" ]; then
             echo "❌ Release Please PR but no decision file found - this should not happen"
             exit 1
           else
             echo "⚠️ No decision file found, falling back to comment parsing for regular PR..."
             
             # Fallback: Get Claude comment with better filtering
-            CLAUDE_DECISION_COMMENT=$(gh pr view ${{ steps.pr-context.outputs.PR_NUMBER }} \
-              --repo ${{ github.repository }} \
+            CLAUDE_DECISION_COMMENT=$(gh pr view "$PR_NUMBER" \
+              --repo "$GITHUB_REPOSITORY" \
               --json comments \
               --jq '.comments[] | select(.author.login == "claude" and (.body | contains("\"decision\"") and (contains("APPROVE") or contains("REJECT")))) | .body' \
               | head -1)
             
             if [ -z "$CLAUDE_DECISION_COMMENT" ] || [ "$CLAUDE_DECISION_COMMENT" = "null" ]; then
               echo "❌ No decision comment found, trying latest Claude comment..."
-              CLAUDE_DECISION_COMMENT=$(gh pr view ${{ steps.pr-context.outputs.PR_NUMBER }} \
-                --repo ${{ github.repository }} \
+              CLAUDE_DECISION_COMMENT=$(gh pr view "$PR_NUMBER" \
+                --repo "$GITHUB_REPOSITORY" \
                 --json comments \
                 --jq '.comments[] | select(.author.login == "claude") | .body' \
                 | tail -1)
@@ -788,21 +788,24 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ steps.pr-info.outputs.pr_number }}
+          PR_NUMBER: ${{ steps.pr-context.outputs.PR_NUMBER }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          IS_RELEASE_PLEASE: ${{ steps.pr-context.outputs.IS_RELEASE_PLEASE }}
 
       - name: Apply approved merge decision
         if: steps.parse-decision.outputs.DECISION == 'APPROVE'
         run: |
           echo "✅ Applying approved merge decision..."
-          echo "📝 Reason: ${{ steps.parse-decision.outputs.REASON }}"
+          echo "📝 Reason: $REASON"
           
           # Auto-merge if this is a Release Please PR and recommended action is auto-merge
-          if [ "${{ steps.pr-context.outputs.IS_RELEASE_PLEASE }}" = "true" ] && [ "${{ steps.parse-decision.outputs.RECOMMENDED_ACTION }}" = "auto-merge" ]; then
+          if [ "$IS_RELEASE_PLEASE" = "true" ] && [ "$RECOMMENDED_ACTION" = "auto-merge" ]; then
             echo "🚀 Auto-merging Release Please PR..."
             
-            if gh pr merge ${{ steps.pr-context.outputs.PR_NUMBER }} \
-              --repo ${{ github.repository }} \
+            if gh pr merge "$PR_NUMBER" \
+              --repo "$GITHUB_REPOSITORY" \
               --auto \
               --squash; then
               echo "✅ Auto-merge enabled successfully"
@@ -810,11 +813,10 @@ jobs:
               echo "::warning::Failed to enable auto-merge. PR may need manual merge."
             fi
           else
-            echo "📋 PR approved but requires manual merge (action: ${{ steps.parse-decision.outputs.RECOMMENDED_ACTION }})"
+            echo "📋 PR approved but requires manual merge (action: $RECOMMENDED_ACTION)"
           fi
           
           # Create success status (truncate description to 140 chars max)
-          REASON="${{ steps.parse-decision.outputs.REASON }}"
           DESCRIPTION="GitPlus AI approved: ${REASON:0:120}"  # Leave room for prefix
           gh api "repos/$GITHUB_REPOSITORY/statuses/$COMMIT_SHA" \
             -f state=success \
@@ -824,16 +826,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_NUMBER: ${{ steps.pr-context.outputs.PR_NUMBER }}
+          IS_RELEASE_PLEASE: ${{ steps.pr-context.outputs.IS_RELEASE_PLEASE }}
+          RECOMMENDED_ACTION: ${{ steps.parse-decision.outputs.RECOMMENDED_ACTION }}
+          REASON: ${{ steps.parse-decision.outputs.REASON }}
 
       - name: Handle manual approval decision
         if: steps.parse-decision.outputs.DECISION == 'MANUAL_APPROVAL'
         run: |
           echo "👤 PR requires manual approval"
-          echo "📝 Reason: ${{ steps.parse-decision.outputs.REASON }}"
+          echo "📝 Reason: $REASON"
           echo "🔍 This indicates good code quality but human review is needed"
           
           # Create success status with manual approval decision for auto-merge consumption
-          REASON="${{ steps.parse-decision.outputs.REASON }}"
           DESCRIPTION="Manual approval: ${REASON:0:110}"  # Keep under 140 chars
           gh api "repos/$GITHUB_REPOSITORY/statuses/$COMMIT_SHA" \
             -f state=success \
@@ -843,29 +848,30 @@ jobs:
           # Export decision for auto-merge job consumption
           echo "MERGE_DECISION=MANUAL_APPROVAL" >> $GITHUB_OUTPUT
           echo "MERGE_REASON=$REASON" >> $GITHUB_OUTPUT
-          echo "RECOMMENDED_ACTION=${{ steps.parse-decision.outputs.RECOMMENDED_ACTION }}" >> $GITHUB_OUTPUT
+          echo "RECOMMENDED_ACTION=$RECOMMENDED_ACTION" >> $GITHUB_OUTPUT
           
           echo "✅ Manual approval decision completed - ready for auto-merge evaluation"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          REASON: ${{ steps.parse-decision.outputs.REASON }}
+          RECOMMENDED_ACTION: ${{ steps.parse-decision.outputs.RECOMMENDED_ACTION }}
 
       - name: Handle rejected merge decision
         if: failure()
         run: |
           echo "❌ PR rejected for merging"
-          if [ -n "${{ steps.parse-decision.outputs.REASON }}" ]; then
-            echo "📝 Reason: ${{ steps.parse-decision.outputs.REASON }}"
+          if [ -n "$REASON" ]; then
+            echo "📝 Reason: $REASON"
           fi
-          if [ -n "${{ steps.parse-decision.outputs.CRITICAL_ISSUES }}" ]; then
-            echo "⚠️ Critical Issues: ${{ steps.parse-decision.outputs.CRITICAL_ISSUES }}"
+          if [ -n "$CRITICAL_ISSUES" ]; then
+            echo "⚠️ Critical Issues: $CRITICAL_ISSUES"
           fi
           
           # Create failure status (truncate description to 140 chars max)
           DESCRIPTION="GitPlus AI rejected PR"
-          if [ -n "${{ steps.parse-decision.outputs.REASON }}" ]; then
-            REASON="${{ steps.parse-decision.outputs.REASON }}"
+          if [ -n "$REASON" ]; then
             DESCRIPTION="${DESCRIPTION}: ${REASON:0:115}"  # Leave room for prefix
           fi
           
@@ -877,6 +883,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          REASON: ${{ steps.parse-decision.outputs.REASON }}
+          CRITICAL_ISSUES: ${{ steps.parse-decision.outputs.CRITICAL_ISSUES }}
 
   auto-merge:
     runs-on: ubuntu-latest
@@ -914,8 +922,7 @@ jobs:
       - name: Check merge eligibility
         id: check-merge
         run: |
-          PR_NUMBER=${{ steps.pr-info.outputs.pr_number }}
-          PR_DATA='${{ steps.pr-info.outputs.PR_DATA }}'
+          # All values now come from environment variables
           
           MERGEABLE=$(echo "$PR_DATA" | jq -r '.mergeable')
           MERGE_STATE=$(echo "$PR_DATA" | jq -r '.mergeStateStatus')
@@ -962,6 +969,8 @@ jobs:
           echo "eligible=true" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr-info.outputs.pr_number }}
+          PR_DATA: ${{ steps.pr-info.outputs.PR_DATA }}
 
       - name: Execute auto-merge
         if: |
@@ -970,10 +979,7 @@ jobs:
            (needs.merge-decision.outputs.DECISION == 'MANUAL_APPROVAL' && 
             needs.merge-decision.outputs.RECOMMENDED_ACTION == 'auto-merge'))
         run: |
-          PR_NUMBER=${{ steps.pr-info.outputs.pr_number }}
-          MERGE_METHOD=${{ steps.check-merge.outputs.merge_method }}
-          IS_RELEASE=${{ steps.check-merge.outputs.is_release }}
-          DECISION="${{ needs.merge-decision.outputs.DECISION }}"
+          # All values now come from environment variables
           
           echo "🚀 Auto-merging PR #$PR_NUMBER"
           echo "📋 Decision: $DECISION"
@@ -1053,6 +1059,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ steps.pr-info.outputs.pr_number }}
+          MERGE_METHOD: ${{ steps.check-merge.outputs.merge_method }}
+          IS_RELEASE: ${{ steps.check-merge.outputs.is_release }}
+          DECISION: ${{ needs.merge-decision.outputs.DECISION }}
           GITHUB_REPOSITORY: ${{ github.repository }}
 
       - name: Handle manual approval (no auto-merge)
@@ -1061,8 +1070,7 @@ jobs:
           needs.merge-decision.outputs.DECISION == 'MANUAL_APPROVAL' && 
           needs.merge-decision.outputs.RECOMMENDED_ACTION != 'auto-merge'
         run: |
-          PR_NUMBER=${{ steps.pr-info.outputs.pr_number }}
-          REASON="${{ needs.merge-decision.outputs.REASON }}"
+          # Values come from environment variables
           
           echo "👤 Manual approval required - skipping auto-merge"
           echo "📝 Reason: $REASON"
