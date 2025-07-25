@@ -50,9 +50,28 @@ jobs:
             - Test coverage
             
             Be constructive and helpful in your feedback.
+            
+            **IMPORTANT**: After completing your review, save your COMPLETE review output to a file:
+            
+            ```bash
+            # Save your entire review output to file (copy everything you just wrote above)
+            cat > /tmp/claude-review-analysis.md << 'EOF'
+            [PASTE YOUR COMPLETE REVIEW OUTPUT HERE - INCLUDING ALL DETAILS, ANALYSIS, FINDINGS, RECOMMENDATIONS, EVERYTHING YOU WROTE ABOVE]
+            EOF
+            ```
+            
+            **Critical**: The file must contain your FULL review - all code analysis, security findings, performance notes, recommendations, concerns, approvals, everything. Do not summarize or shorten it. The merge decision needs your complete analysis.
 
           # Optional: Use sticky comments to make Claude reuse the same comment on subsequent pushes to the same PR
           use_sticky_comment: true
+
+      - name: Upload review analysis
+        if: always()  # Upload even if review has issues
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-review-analysis-${{ github.event.pull_request.number }}
+          path: /tmp/claude-review-analysis.md
+          retention-days: 7
           
           # Optional: Customize review based on file types
           # direct_prompt: |
