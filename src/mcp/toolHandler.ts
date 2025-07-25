@@ -2,6 +2,7 @@ import { ToolName } from './toolDefinitions';
 import { GitClient } from '../git/client';
 import { PlatformManager } from '../git/platform';
 import { ChangeAnalyzer } from '../git/analyzer';
+import { ConflictResolver } from '../git/conflictResolver';
 import { Platform } from '../types';
 
 // MCP Tool result type (matches the SDK's expected format with index signature)
@@ -448,55 +449,19 @@ export class ToolHandler {
                 
                 // Phase 6.5: Check for PR conflicts and attempt resolution
                 if (!force) {
-                  try {
-                    steps.push('🔍 Checking for PR merge conflicts...');
-                    
-                    // Pull the base branch to detect and resolve conflicts
-                    const targetBranch = baseBranch || updatedStatus.baseBranch;
-                    const pullResult = await gitClient.pull({ 
-                      branch: targetBranch,
-                      strategy: 'merge'
-                    });
-                    
-                    if (!pullResult.success && pullResult.conflicts && pullResult.conflicts.length > 0) {
-                      steps.push(`⚠️ PR has conflicts with ${targetBranch} (${pullResult.conflicts.length} files)`);
-                      steps.push('🤖 Attempting AI-powered conflict resolution...');
-                      
-                      // Use ai-safe strategy for PR conflicts (high confidence required)
-                      const resolveResult = await gitClient.resolveConflicts('ai-safe');
-                      
-                      if (resolveResult.success) {
-                        // Continue the merge
-                        await gitClient.continueMerge();
-                        steps.push(`✅ AI resolved ${resolveResult.resolvedFiles.length} conflicts (${resolveResult.confidence}% confidence)`);
-                        
-                        if (resolveResult.warnings && resolveResult.warnings.length > 0) {
-                          steps.push(`⚠️ AI warnings: ${resolveResult.warnings.join(', ')}`);
-                        }
-                        
-                        // Push the resolution to update the PR
-                        await gitClient.push({ branch: currentBranch });
-                        steps.push('✅ Updated PR with resolved conflicts');
-                      } else {
-                        // Abort the merge since we couldn't resolve
-                        try {
-                          await gitClient.abortMerge();
-                        } catch {
-                          // Ignore abort errors
-                        }
-                        steps.push(`⚠️ AI couldn't resolve conflicts automatically: ${resolveResult.reasoning}`);
-                        steps.push(`📝 Manual resolution required - PR: ${prResponse.url}`);
-                        steps.push('💡 Tip: Pull the base branch locally, resolve conflicts, and push to update the PR');
-                      }
-                    } else if (pullResult.success) {
-                      // Successfully merged without conflicts
-                      steps.push('✅ PR has no conflicts with base branch');
-                    }
-                  } catch (conflictCheckError) {
-                    // Non-critical error - PR was created successfully
-                    if (verbose) {
-                      steps.push(`⚠️ Could not check for PR conflicts: ${conflictCheckError}`);
-                    }
+                  const conflictResolver = new ConflictResolver(gitClient);
+                  const targetBranch = baseBranch || updatedStatus.baseBranch;
+                  const conflictResult = await conflictResolver.resolvePRConflicts(
+                    currentBranch,
+                    targetBranch,
+                    { verbose }
+                  );
+                  
+                  steps.push(...conflictResult.steps);
+                  
+                  if (conflictResult.hasConflicts && !conflictResult.resolved) {
+                    steps.push(`📝 Manual resolution required - PR: ${prResponse.url}`);
+                    steps.push('💡 Tip: Pull the base branch locally, resolve conflicts, and push to update the PR');
                   }
                 }
               } else {
