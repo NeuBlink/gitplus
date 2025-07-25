@@ -330,14 +330,21 @@ jobs:
                - If Claude approves changes or finds no blocking issues → APPROVE
                - If Claude identifies critical issues or concerns → REJECT
                - If Claude requests changes → REJECT
-            5. **No Clear Guidance**: If unclear, err on the side of manual review → REJECT
+            5. **Good Code, Process Issues**: If code quality is good (tests pass, no critical issues) but there are workflow/review process issues → MANUAL_APPROVAL
+            6. **No Clear Guidance**: If unclear but no major issues detected → MANUAL_APPROVAL
 
             **Critical**: Your decision must be based primarily on Claude's review content above. The CI status is secondary to Claude's analysis.
+
+            **IMPORTANT: Use MANUAL_APPROVAL for situations like:**
+            - Good code quality but missing detailed review content
+            - All/most CI checks pass but needs human verification
+            - Minor workflow issues that don't indicate code problems
+            - Uncertainty that doesn't stem from actual code issues
 
             **CRITICAL: You MUST respond with valid JSON in this exact format:**
             ```json
             {
-              "decision": "APPROVE|REJECT",
+              "decision": "APPROVE|MANUAL_APPROVAL|REJECT",
               "reason": "Brief explanation of your decision based on Claude review and CI status",
               "critical_issues": ["list", "of", "any", "blocking", "issues"],
               "recommended_action": "auto-merge|manual-review|fix-issues"
@@ -350,7 +357,7 @@ jobs:
             ```bash
             MERGE_RUN_DIR="/tmp/merge-decision-${{ github.run_id }}-${{ github.run_attempt }}"
             mkdir -p "$MERGE_RUN_DIR"
-            echo '{"decision": "APPROVE", "reason": "Your reasoning here", "critical_issues": [], "recommended_action": "auto-merge"}' > "$MERGE_RUN_DIR/merge-decision.json"
+            echo '{"decision": "MANUAL_APPROVAL", "reason": "Good code quality but needs human review", "critical_issues": [], "recommended_action": "manual-review"}' > "$MERGE_RUN_DIR/merge-decision.json"
             ```
             
             Replace the values with your actual decision. This ensures the workflow can reliably access your decision.
@@ -421,12 +428,14 @@ jobs:
           echo "CRITICAL_ISSUES=$CRITICAL_ISSUES" >> $GITHUB_OUTPUT
           echo "RECOMMENDED_ACTION=$RECOMMENDED_ACTION" >> $GITHUB_OUTPUT
           
-          # Fail the step if decision is REJECT
+          # Fail the step only if decision is REJECT
           if [ "$DECISION" = "REJECT" ]; then
             echo "❌ Claude rejected this PR"
             exit 1
           elif [ "$DECISION" = "APPROVE" ]; then
             echo "✅ Claude approved this PR"
+          elif [ "$DECISION" = "MANUAL_APPROVAL" ]; then
+            echo "👤 Claude recommends manual approval - good code but needs human review"
           else
             echo "❓ Unknown decision: $DECISION"
             exit 1
@@ -463,6 +472,25 @@ jobs:
             -f state=success \
             -f description="$DESCRIPTION" \
             -f context="merge-decision" 2>/dev/null || echo "::warning::Status creation failed"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Handle manual approval decision
+        if: steps.parse-decision.outputs.DECISION == 'MANUAL_APPROVAL'
+        run: |
+          echo "👤 PR requires manual approval"
+          echo "📝 Reason: ${{ steps.parse-decision.outputs.REASON }}"
+          echo "🔍 This indicates good code quality but human review is needed"
+          
+          # Create pending status to indicate manual review needed
+          REASON="${{ steps.parse-decision.outputs.REASON }}"
+          DESCRIPTION="Manual approval needed: ${REASON:0:100}"  # Keep under 140 chars
+          gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha || github.sha }} \
+            -f state=pending \
+            -f description="$DESCRIPTION" \
+            -f context="merge-decision" 2>/dev/null || echo "::warning::Status creation failed"
+          
+          echo "✅ Manual approval status set - PR is ready for human review"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
