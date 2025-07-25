@@ -405,17 +405,23 @@ jobs:
           echo "Searching for Claude review artifacts for PR #$PR_NUMBER"
           
           # Get list of artifacts and find the most recent Claude review with run info
-          if ! ALL_ARTIFACTS=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts" 2>/dev/null); then
+          set +e  # Don't exit on error for error handling
+          ALL_ARTIFACTS=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts" 2>/dev/null)
+          if [ $? -ne 0 ] || [ -z "$ALL_ARTIFACTS" ]; then
             echo "❌ Failed to fetch artifacts from GitHub API"
             echo "analysis_available=false" >> $GITHUB_OUTPUT
+            set -e
             exit 0
           fi
           
-          if ! ARTIFACT_DATA=$(echo "$ALL_ARTIFACTS" | jq --arg pr_prefix "claude-review-analysis-$PR_NUMBER-" '.artifacts[] | select(.name | startswith($pr_prefix)) | {name: .name, id: .id, workflow_run: .workflow_run.id}' 2>/dev/null | head -1); then
-            echo "❌ Failed to parse artifacts JSON"
+          ARTIFACT_DATA=$(echo "$ALL_ARTIFACTS" | jq --arg pr_prefix "claude-review-analysis-$PR_NUMBER-" '.artifacts[] | select(.name | startswith($pr_prefix)) | {name: .name, id: .id, workflow_run: .workflow_run.id}' 2>/dev/null | head -1)
+          if [ $? -ne 0 ] || [ -z "$ARTIFACT_DATA" ] || [ "$ARTIFACT_DATA" = "null" ]; then
+            echo "❌ Failed to parse artifacts JSON or no matching artifacts found"
             echo "analysis_available=false" >> $GITHUB_OUTPUT
+            set -e
             exit 0
           fi
+          set -e  # Re-enable exit on error
           
           if [ -n "$ARTIFACT_DATA" ] && [ "$ARTIFACT_DATA" != "null" ]; then
             # Extract individual fields without CSV parsing
