@@ -405,9 +405,8 @@ jobs:
           echo "Searching for Claude review artifacts for PR #$PR_NUMBER"
           
           # Get list of artifacts and find the most recent Claude review with run info
-          ARTIFACT_INFO=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts" \
-            --jq --arg pr_prefix "claude-review-analysis-$PR_NUMBER-" '.artifacts[] | select(.name | startswith($pr_prefix)) | {name: .name, id: .id, workflow_run: .workflow_run.id} | [.workflow_run, .name, .id] | @csv' \
-            | head -1 | tr -d '"')
+          ALL_ARTIFACTS=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts")
+          ARTIFACT_INFO=$(echo "$ALL_ARTIFACTS" | jq --arg pr_prefix "claude-review-analysis-$PR_NUMBER-" '.artifacts[] | select(.name | startswith($pr_prefix)) | {name: .name, id: .id, workflow_run: .workflow_run.id} | [.workflow_run, .name, .id] | @csv' | head -1 | tr -d '"')
           
           if [ -n "$ARTIFACT_INFO" ]; then
             # Parse the CSV: workflow_run_id,artifact_name,artifact_id
