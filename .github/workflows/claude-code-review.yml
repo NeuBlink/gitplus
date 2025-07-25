@@ -82,12 +82,20 @@ jobs:
         run: |
           echo "📝 Capturing Claude review content for artifact..."
           
-          # Create directory for this workflow run
-          RUN_DIR="/tmp/claude-review-${{ github.run_id }}-${{ github.run_attempt }}"
-          mkdir -p "$RUN_DIR"
+          # Validate and sanitize GitHub context variables
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || [ "$PR_NUMBER" -lt 1 ] || [ "$PR_NUMBER" -gt 99999 ]; then
+            echo "❌ ERROR: Invalid PR number format: $PR_NUMBER"
+            exit 1
+          fi
           
-          # Get the Claude review comment from the PR
-          PR_NUMBER=${{ github.event.pull_request.number }}
+          if ! [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]] || ! [[ "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]; then
+            echo "❌ ERROR: Invalid GitHub run parameters"
+            exit 1
+          fi
+          
+          # Create directory for this workflow run using validated variables
+          RUN_DIR="/tmp/claude-review-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$RUN_DIR"
           
           echo "🔍 Waiting for Claude's comprehensive review to be posted..."
           
@@ -104,10 +112,10 @@ jobs:
             # Look for Claude comments with comprehensive content
             # Get the Claude comment body directly (should be only one)
             # Fixed: Removed tail -1 which was truncating multi-line content
-            POTENTIAL_REVIEW=$(gh pr view $PR_NUMBER \
-              --repo ${{ github.repository }} \
+            POTENTIAL_REVIEW=$(gh pr view "$PR_NUMBER" \
+              --repo "$GITHUB_REPOSITORY" \
               --json comments | \
-              jq -r ".comments[] | select(.author.login == \"claude\" and (.body | length > $MIN_REVIEW_LENGTH)) | .body")
+              jq -r --arg min_length "$MIN_REVIEW_LENGTH" '.comments[] | select(.author.login == "claude" and (.body | length > ($min_length | tonumber))) | .body')
             
             if [ -n "$POTENTIAL_REVIEW" ] && [ "$POTENTIAL_REVIEW" != "null" ]; then
               # Check if this looks like a comprehensive review with flexible pattern matching
@@ -171,7 +179,7 @@ jobs:
             echo "❌ Failed to capture Claude review after waiting 2 minutes." >> "$RUN_DIR/claude-review-analysis.md"
             echo "" >> "$RUN_DIR/claude-review-analysis.md"
             echo "Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> "$RUN_DIR/claude-review-analysis.md"
-            echo "Workflow Run: ${{ github.run_id }}" >> "$RUN_DIR/claude-review-analysis.md"
+            echo "Workflow Run: $GITHUB_RUN_ID" >> "$RUN_DIR/claude-review-analysis.md"
             echo "PR Number: $PR_NUMBER" >> "$RUN_DIR/claude-review-analysis.md"
             
             # Fail the step
@@ -179,13 +187,17 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
 
       - name: Upload review analysis
         if: always()  # Upload even if review has issues
         uses: actions/upload-artifact@v4
         with:
-          name: claude-review-analysis-${{ github.event.pull_request.number }}-${{ github.run_id }}
-          path: /tmp/claude-review-${{ github.run_id }}-${{ github.run_attempt }}/claude-review-analysis.md
+          name: claude-review-analysis-${{ env.PR_NUMBER }}-${{ env.GITHUB_RUN_ID }}
+          path: /tmp/claude-review-${{ env.GITHUB_RUN_ID }}-${{ env.GITHUB_RUN_ATTEMPT }}/claude-review-analysis.md
           retention-days: 7
           
           # Security Note: All workflow inputs are properly sanitized and do not use

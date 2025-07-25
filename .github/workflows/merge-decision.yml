@@ -28,11 +28,25 @@ jobs:
       - name: Get PR number
         id: get-pr
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "pr_number=${{ inputs.pr_number }}" >> $GITHUB_OUTPUT
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            # Validate workflow_dispatch input
+            if ! [[ "$INPUT_PR_NUMBER" =~ ^[0-9]+$ ]] || [ "$INPUT_PR_NUMBER" -lt 1 ] || [ "$INPUT_PR_NUMBER" -gt 99999 ]; then
+              echo "❌ ERROR: Invalid PR number in workflow_dispatch: $INPUT_PR_NUMBER"
+              exit 1
+            fi
+            echo "pr_number=$INPUT_PR_NUMBER" >> $GITHUB_OUTPUT
           else
-            echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+            # Validate pull_request event PR number
+            if ! [[ "$EVENT_PR_NUMBER" =~ ^[0-9]+$ ]] || [ "$EVENT_PR_NUMBER" -lt 1 ] || [ "$EVENT_PR_NUMBER" -gt 99999 ]; then
+              echo "❌ ERROR: Invalid PR number from event: $EVENT_PR_NUMBER"
+              exit 1
+            fi
+            echo "pr_number=$EVENT_PR_NUMBER" >> $GITHUB_OUTPUT
           fi
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
       
       - name: Wait for other checks to complete
         id: check-status
@@ -48,7 +62,7 @@ jobs:
             echo "Attempt $i of $MAX_ATTEMPTS"
             
             # Get all check runs for this PR
-            CHECKS=$(gh pr checks $PR_NUMBER --repo ${{ github.repository }} --json name,state)
+            CHECKS=$(gh pr checks "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json name,state)
             
             # Get all available checks and determine what's actually running
             AVAILABLE_CHECKS=$(echo "$CHECKS" | jq -r '.[].name' | sort)
@@ -111,6 +125,7 @@ jobs:
           exit 1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
 
   merge-decision:
     runs-on: ubuntu-latest
@@ -125,20 +140,31 @@ jobs:
       - name: Gather PR context
         id: pr-context
         run: |
-          PR_NUMBER=${{ needs.wait-for-checks.outputs.pr_number }}
+          # Validate and sanitize PR number from previous job
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || [ "$PR_NUMBER" -lt 1 ] || [ "$PR_NUMBER" -gt 99999 ]; then
+            echo "❌ ERROR: Invalid PR number from wait-for-checks: $PR_NUMBER"
+            exit 1
+          fi
+          
+          # Validate repository format
+          if ! [[ "$GITHUB_REPOSITORY" =~ ^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$ ]]; then
+            echo "❌ ERROR: Invalid repository format: $GITHUB_REPOSITORY"
+            exit 1
+          fi
+          
           echo "Gathering comprehensive PR context for PR #$PR_NUMBER..."
           
           # Get all check results
           echo "CHECK_RESULTS<<EOF" >> $GITHUB_OUTPUT
-          gh pr checks $PR_NUMBER \
-            --repo ${{ github.repository }} \
+          gh pr checks "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
             --json name,state,conclusion \
             | jq -r '.[] | "\(.name): \(.state) (\(.conclusion // "pending"))"' >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           
           # Get PR metadata
-          PR_DATA=$(gh pr view $PR_NUMBER \
-            --repo ${{ github.repository }} \
+          PR_DATA=$(gh pr view "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
             --json title,body,mergeable,mergeStateStatus,isDraft,author,baseRefName,headRefName,commits)
           
           echo "PR_NUMBER=$PR_NUMBER" >> $GITHUB_OUTPUT
@@ -160,11 +186,17 @@ jobs:
           fi
           echo "IS_RELEASE_PLEASE=$IS_RELEASE_PLEASE" >> $GITHUB_OUTPUT
           
+          # Validate HEAD SHA format
+          if ! [[ "$HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "❌ ERROR: Invalid HEAD SHA format: $HEAD_SHA"
+            exit 1
+          fi
+          
           # Get detailed CI check information
           echo "🔍 Gathering detailed CI check information..."
           
           # Get all checks summary
-          ALL_CHECKS=$(gh pr checks $PR_NUMBER --repo ${{ github.repository }} --json name,state)
+          ALL_CHECKS=$(gh pr checks "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json name,state)
           
           # Key check states - be flexible about check names
           TEST_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "test (20.x)" or .name == "CI / test (20.x)") | .state' | head -1)
@@ -220,8 +252,8 @@ jobs:
           # Get simple failed workflow summary for AI to analyze
           if [ $FAILED_CHECKS -gt 0 ]; then
             echo "📋 Collecting failed workflow data for AI analysis..."
-            FAILED_WORKFLOW_RAW=$(gh api repos/${{ github.repository }}/actions/runs \
-              --jq ".workflow_runs[] | select(.head_sha == \"${{ github.event.pull_request.head.sha }}\" and .conclusion == \"failure\") | {name: .name, conclusion: .conclusion, created_at: .created_at, html_url: .html_url}" \
+            FAILED_WORKFLOW_RAW=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs" \
+              --jq --arg head_sha "$HEAD_SHA" '.workflow_runs[] | select(.head_sha == $head_sha and .conclusion == "failure") | {name: .name, conclusion: .conclusion, created_at: .created_at, html_url: .html_url}' \
               | head -5 | jq -s .)
             
             WORKFLOW_FAILURE_ANALYSIS="**Failed Workflows Data for AI Analysis:**\\n\\n\\\`\\\`\\\`json\\n$(echo "$FAILED_WORKFLOW_RAW" | jq .)\\n\\\`\\\`\\\`\\n\\n**Summary:** $FAILED_CHECKS workflow(s) failed. AI should analyze the above data to determine if failures are due to code issues, infrastructure problems, or process issues."
@@ -236,6 +268,9 @@ jobs:
           echo "📊 CI Summary: $PASSED_CHECKS passed, $FAILED_CHECKS failed out of $TOTAL_CHECKS total"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.wait-for-checks.outputs.pr_number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -247,11 +282,7 @@ jobs:
         if: steps.pr-context.outputs.IS_RELEASE_PLEASE == 'true'
         run: |
           echo "🔒 Validating Release Please PR security..."
-          PR_NUMBER=${{ steps.pr-context.outputs.PR_NUMBER }}
-          
-          # Security validation: Strict author verification
-          AUTHOR="${{ steps.pr-context.outputs.PR_AUTHOR }}"
-          HEAD_BRANCH="${{ steps.pr-context.outputs.HEAD_BRANCH }}"
+          # Security validation: Strict author verification using environment variables
           
           if [ "$AUTHOR" != "app/github-actions" ]; then
             echo "❌ SECURITY VIOLATION: Invalid Release Please author: $AUTHOR"
@@ -267,7 +298,7 @@ jobs:
           
           # Validate file changes - only allow safe release files
           echo "🔍 Validating changed files..."
-          CHANGED_FILES=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} --json files --jq '.files[].path')
+          CHANGED_FILES=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json files --jq '.files[].path')
           
           ALLOWED_FILES=(
             "package.json"
@@ -311,22 +342,32 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr-info.outputs.pr_number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.pr-context.outputs.PR_NUMBER }}
+          AUTHOR: ${{ steps.pr-context.outputs.PR_AUTHOR }}
+          HEAD_BRANCH: ${{ steps.pr-context.outputs.HEAD_BRANCH }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
 
       - name: Download Claude review analysis
         id: download-review
         if: steps.pr-context.outputs.IS_RELEASE_PLEASE != 'true'
         run: |
+          # Validate GitHub run parameters
+          if ! [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]] || ! [[ "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]; then
+            echo "❌ ERROR: Invalid GitHub run parameters"
+            exit 1
+          fi
+          
           # Create unique directory for this merge decision run
-          MERGE_RUN_DIR="/tmp/merge-decision-${{ github.run_id }}-${{ github.run_attempt }}"
+          MERGE_RUN_DIR="/tmp/merge-decision-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "$MERGE_RUN_DIR"
           
-          # Try to download the most recent Claude review artifact
-          PR_NUMBER=${{ steps.pr-context.outputs.PR_NUMBER }}
           echo "Searching for Claude review artifacts for PR #$PR_NUMBER"
           
           # Get list of artifacts and find the most recent Claude review with run info
-          ARTIFACT_INFO=$(gh api repos/${{ github.repository }}/actions/artifacts \
-            --jq ".artifacts[] | select(.name | startswith(\"claude-review-analysis-$PR_NUMBER-\")) | {name: .name, id: .id, workflow_run: .workflow_run.id} | [.workflow_run, .name, .id] | @csv" \
+          ARTIFACT_INFO=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts" \
+            --jq --arg pr_prefix "claude-review-analysis-$PR_NUMBER-" '.artifacts[] | select(.name | startswith($pr_prefix)) | {name: .name, id: .id, workflow_run: .workflow_run.id} | [.workflow_run, .name, .id] | @csv' \
             | head -1 | tr -d '"')
           
           if [ -n "$ARTIFACT_INFO" ]; then
@@ -335,7 +376,7 @@ jobs:
             echo "Found artifact: $ARTIFACT_NAME (ID: $ARTIFACT_ID, Run: $WORKFLOW_RUN_ID)"
             
             # Download using the run ID for better reliability
-            if gh run download $WORKFLOW_RUN_ID --repo ${{ github.repository }} --name "$ARTIFACT_NAME" --dir "$MERGE_RUN_DIR/" 2>/dev/null; then
+            if gh run download "$WORKFLOW_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$ARTIFACT_NAME" --dir "$MERGE_RUN_DIR/" 2>/dev/null; then
               echo "✅ Successfully downloaded artifact from run $WORKFLOW_RUN_ID"
               
               # Look for the analysis file in the downloaded content
@@ -357,11 +398,17 @@ jobs:
           else
             echo "⚠️ No Claude review artifact found for PR #$PR_NUMBER"
             echo "📋 Available artifacts:"
-            gh api repos/${{ github.repository }}/actions/artifacts --jq ".artifacts[] | select(.name | contains(\"claude\")) | .name" | head -5
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts" --jq '.artifacts[] | select(.name | contains("claude")) | .name' | head -5
             echo "analysis_available=false" >> $GITHUB_OUTPUT
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr-info.outputs.pr_number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.pr-context.outputs.PR_NUMBER }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         continue-on-error: true
 
       - name: Validate Claude review content
@@ -741,6 +788,8 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr-info.outputs.pr_number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
 
       - name: Apply approved merge decision
         if: steps.parse-decision.outputs.DECISION == 'APPROVE'
@@ -767,12 +816,14 @@ jobs:
           # Create success status (truncate description to 140 chars max)
           REASON="${{ steps.parse-decision.outputs.REASON }}"
           DESCRIPTION="GitPlus AI approved: ${REASON:0:120}"  # Leave room for prefix
-          gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha || github.sha }} \
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$COMMIT_SHA" \
             -f state=success \
             -f description="$DESCRIPTION" \
             -f context="merge-decision" 2>/dev/null || echo "::warning::Status creation failed"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Handle manual approval decision
         if: steps.parse-decision.outputs.DECISION == 'MANUAL_APPROVAL'
@@ -784,7 +835,7 @@ jobs:
           # Create success status with manual approval decision for auto-merge consumption
           REASON="${{ steps.parse-decision.outputs.REASON }}"
           DESCRIPTION="Manual approval: ${REASON:0:110}"  # Keep under 140 chars
-          gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha || github.sha }} \
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$COMMIT_SHA" \
             -f state=success \
             -f description="$DESCRIPTION" \
             -f context="merge-decision" 2>/dev/null || echo "::warning::Status creation failed"
@@ -797,6 +848,8 @@ jobs:
           echo "✅ Manual approval decision completed - ready for auto-merge evaluation"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Handle rejected merge decision
         if: failure()
@@ -816,12 +869,14 @@ jobs:
             DESCRIPTION="${DESCRIPTION}: ${REASON:0:115}"  # Leave room for prefix
           fi
           
-          gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha || github.sha }} \
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$COMMIT_SHA" \
             -f state=failure \
             -f description="$DESCRIPTION" \
             -f context="merge-decision" 2>/dev/null || echo "::warning::Status creation failed"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
   auto-merge:
     runs-on: ubuntu-latest
@@ -835,12 +890,17 @@ jobs:
       - name: Get PR information
         id: pr-info
         run: |
-          PR_NUMBER=${{ github.event.pull_request.number }}
-          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
-          echo "🔍 Processing auto-merge for PR #$PR_NUMBER"
+          # Validate PR number from event
+          if ! [[ "$EVENT_PR_NUMBER" =~ ^[0-9]+$ ]] || [ "$EVENT_PR_NUMBER" -lt 1 ] || [ "$EVENT_PR_NUMBER" -gt 99999 ]; then
+            echo "❌ ERROR: Invalid PR number from event: $EVENT_PR_NUMBER"
+            exit 1
+          fi
+          
+          echo "pr_number=$EVENT_PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "🔍 Processing auto-merge for PR #$EVENT_PR_NUMBER"
           
           # Get PR details
-          PR_DATA=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} \
+          PR_DATA=$(gh pr view "$EVENT_PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
             --json title,author,headRefName,mergeable,mergeStateStatus,isDraft,state)
           
           echo "PR_DATA<<EOF" >> $GITHUB_OUTPUT
@@ -848,6 +908,8 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
 
       - name: Check merge eligibility
         id: check-merge
@@ -921,12 +983,12 @@ jobs:
           echo "🔍 Checking repository and PR status..."
           
           # Check PR mergeable status first
-          PR_STATUS=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} --json mergeable,mergeStateStatus | jq -r '.mergeStateStatus')
+          PR_STATUS=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json mergeable,mergeStateStatus | jq -r '.mergeStateStatus')
           echo "📋 PR merge state: $PR_STATUS"
           
           if [ "$PR_STATUS" != "CLEAN" ] && [ "$PR_STATUS" != "UNSTABLE" ]; then
             echo "❌ PR is not in a mergeable state: $PR_STATUS"
-            gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
               --body "⚠️ **Auto-merge Blocked**
 
             ❌ **Issue**: PR merge state is '$PR_STATUS'
@@ -938,13 +1000,13 @@ jobs:
           
           # Try auto-merge first (GitHub's auto-merge feature)
           echo "🔄 Attempting to enable auto-merge with $MERGE_METHOD method..."
-          AUTO_MERGE_OUTPUT=$(gh pr merge $PR_NUMBER --repo ${{ github.repository }} -$MERGE_METHOD --auto 2>&1) || AUTO_MERGE_FAILED=true
+          AUTO_MERGE_OUTPUT=$(gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" -"$MERGE_METHOD" --auto 2>&1) || AUTO_MERGE_FAILED=true
           
           if [ -z "$AUTO_MERGE_FAILED" ]; then
             echo "✅ Successfully enabled auto-merge for PR #$PR_NUMBER"
             echo "📋 Auto-merge output: $AUTO_MERGE_OUTPUT"
             
-            gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
               --body "🤖 **Auto-merge Enabled** by GitPlus\\n\\n✅ **Decision**: $DECISION\\n🚀 **Method**: $MERGE_METHOD\\n\\nThis PR will be automatically merged once all required status checks pass."
               
           else
@@ -952,13 +1014,13 @@ jobs:
             echo "🔄 Attempting direct merge..."
             
             # Try immediate merge
-            DIRECT_MERGE_OUTPUT=$(gh pr merge $PR_NUMBER --repo ${{ github.repository }} -$MERGE_METHOD 2>&1) || DIRECT_MERGE_FAILED=true
+            DIRECT_MERGE_OUTPUT=$(gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" -"$MERGE_METHOD" 2>&1) || DIRECT_MERGE_FAILED=true
             
             if [ -z "$DIRECT_MERGE_FAILED" ]; then
               echo "✅ Successfully merged PR #$PR_NUMBER directly"
               echo "📋 Direct merge output: $DIRECT_MERGE_OUTPUT"
               
-              gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
+              gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
                 --body "🤖 **PR Merged** by GitPlus\\n\\n✅ **Decision**: $DECISION\\n🚀 **Method**: $MERGE_METHOD\\n\\nThis PR has been automatically merged."
                 
             else
@@ -980,7 +1042,7 @@ jobs:
                 FAILURE_REASON="Unknown error during merge operation"
               fi
               
-              gh pr comment $PR_NUMBER --repo ${{ github.repository }} \
+              gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
                 --body "⚠️ **Auto-merge Failed**\\n\\n✅ **Decision**: $DECISION (approved by GitPlus AI)\\n❌ **Issue**: $FAILURE_REASON\\n\\n**Error Details:**\\n\\\`\\\`\\\`\\n$DIRECT_MERGE_OUTPUT\\n\\\`\\\`\\\`\\n\\n**Manual Action Required**: Please merge this PR manually or review repository settings."
               
               # Set output but don't fail the workflow
@@ -990,6 +1052,8 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr-info.outputs.pr_number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
 
       - name: Handle manual approval (no auto-merge)
         if: |
@@ -1007,18 +1071,20 @@ jobs:
           COMMENT_BODY=$'👤 **Manual Approval Required**\n\n📋 **Reason**: '$REASON$'\n🔍 **Action**: Human review needed before merge\n\nGitPlus AI analysis determined this PR has good code quality but requires manual verification before merging.'
           
           # Check for existing manual approval comment and update it (sticky behavior)
-          EXISTING_COMMENT_ID=$(gh api repos/${{ github.repository }}/issues/$PR_NUMBER/comments \
+          EXISTING_COMMENT_ID=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
             --jq '.[] | select(.body | contains("Manual Approval Required") and contains("GitPlus AI analysis determined")) | .id' \
             | head -1)
           
           if [ -n "$EXISTING_COMMENT_ID" ] && [ "$EXISTING_COMMENT_ID" != "null" ]; then
             echo "🔄 Updating existing manual approval comment (ID: $EXISTING_COMMENT_ID)"
-            gh api repos/${{ github.repository }}/issues/comments/$EXISTING_COMMENT_ID \
+            gh api "repos/$GITHUB_REPOSITORY/issues/comments/$EXISTING_COMMENT_ID" \
               --method PATCH \
               --field body="$COMMENT_BODY"
           else
             echo "📝 Creating new manual approval comment"
-            gh pr comment $PR_NUMBER --repo ${{ github.repository }} --body "$COMMENT_BODY"
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$COMMENT_BODY"
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr-info.outputs.pr_number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
