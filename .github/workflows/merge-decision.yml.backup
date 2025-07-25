@@ -640,6 +640,117 @@ jobs:
             ```
 
       - name: Parse merge decision
+            - **Title**: ${{ steps.pr-context.outputs.PR_TITLE }}
+            - **Author**: ${{ steps.pr-context.outputs.PR_AUTHOR }}
+            - **Target Branch**: ${{ steps.pr-context.outputs.BASE_BRANCH }}
+            - **PR Number**: #${{ steps.pr-context.outputs.PR_NUMBER }}
+            - **Is Draft**: ${{ steps.pr-context.outputs.PR_IS_DRAFT }}
+            - **Is Release Please PR**: ${{ steps.pr-context.outputs.IS_RELEASE_PLEASE }}
+            - **Mergeable**: ${{ steps.pr-context.outputs.PR_MERGEABLE }}
+            - **Merge State**: ${{ steps.pr-context.outputs.PR_MERGE_STATE }}
+
+            ## CI/CD Check Results
+            - **Overall Summary**: ${{ steps.pr-context.outputs.CHECKS_SUMMARY }}
+            - **Tests**: ${{ steps.pr-context.outputs.TEST_CONCLUSION }}
+            - **Security**: ${{ steps.pr-context.outputs.SECURITY_CONCLUSION }}
+            - **Validation**: ${{ steps.pr-context.outputs.VALIDATE_CONCLUSION }}
+            - **Claude Review**: ${{ steps.pr-context.outputs.CLAUDE_REVIEW_CONCLUSION }}
+            - **Failed Checks**: ${{ steps.pr-context.outputs.FAILED_CHECKS }}
+
+            ## Workflow Failure Analysis
+            ${{ steps.pr-context.outputs.WORKFLOW_FAILURE_ANALYSIS }}
+
+            ## Complete Claude Code Review Analysis
+            **IMPORTANT: This is the full Claude review content that must guide your decision:**
+            
+            ${{ steps.load-claude-review.outputs.CLAUDE_REVIEW_CONTENT }}
+            
+            ## Your Task
+            Based on the complete context above, **especially Claude's detailed review analysis**, decide whether this PR should be merged.
+
+            **CRITICAL: You MUST first analyze and highlight Claude's key findings:**
+
+            1. **Summarize Claude's Key Findings**: Extract and highlight the most important findings from Claude's review:
+               - Security concerns (if any)
+               - Code quality issues (if any)
+               - Performance considerations (if any)
+               - Test coverage concerns (if any)
+               - Best practices violations (if any)
+               - Overall approval/rejection recommendation
+
+            2. **Highlight Claude's Specific Recommendations**: Clearly state what Claude specifically recommended:
+               - Does Claude approve the changes?
+               - Does Claude request specific changes?
+               - Does Claude identify blocking issues?
+               - Does Claude suggest improvements?
+
+            **Decision Rules** (in priority order):
+            1. **Claude Review Override**: If the Claude review above contains "DO NOT MERGE", "REJECT", or explicitly recommends against merging → REJECT
+            2. **Critical CI Failures**: If any critical CI checks failed → REJECT
+            3. **Workflow Failures**: Use AI analysis to distinguish real issues from infrastructure problems - only REJECT if failures indicate actual code/security/test issues
+            4. **Release Please PRs**: If Release Please PR and all CI checks passed → APPROVE
+            5. **Regular PRs**: Follow Claude's review recommendations:
+               - If Claude approves changes or finds no blocking issues → APPROVE
+               - If Claude identifies critical issues or concerns → REJECT
+               - If Claude requests changes → REJECT
+            6. **Good Code, Process Issues**: If code quality is good (tests pass, no critical issues) but there are workflow/review process issues → MANUAL_APPROVAL
+            7. **No Clear Guidance**: If unclear but no major issues detected → MANUAL_APPROVAL
+
+            **Critical**: Your decision must be based primarily on Claude's review content above. The CI status is secondary to Claude's analysis.
+
+            **IMPORTANT: Use MANUAL_APPROVAL for situations like:**
+            - Good code quality but missing detailed review content
+            - All/most CI checks pass but needs human verification
+            - Minor workflow issues that don't indicate code problems
+            - Uncertainty that doesn't stem from actual code issues
+
+            **Your Analysis Format**: Start your response with:
+            ```
+            ## Claude Review Analysis Summary
+
+            **Key Findings from Claude Code Review:**
+            - [Highlight main findings here]
+            
+            **Claude's Specific Recommendations:**
+            - [Summarize Claude's recommendations here]
+            
+            **Security Concerns:** [Any security issues identified]
+            **Code Quality:** [Code quality assessment]
+            **Test Coverage:** [Test-related findings]
+            
+            ## Workflow Failure Assessment
+            
+            **Failed Workflows Analysis:** [Intelligently analyze the workflow data above - distinguish between code quality issues vs infrastructure/process problems]
+            **Failure Root Cause:** [Are failures due to: test failures, security issues, build problems, or just CI infrastructure issues?]
+            **Impact on Merge Decision:** [Only reject if failures indicate actual code/security problems, not infrastructure glitches]
+            
+            ## Merge Decision Analysis
+            
+            Based on Claude's review, CI status, and workflow failures, my decision is...
+            ```
+
+            **CRITICAL: You MUST respond with valid JSON in this exact format:**
+            ```json
+            {
+              "decision": "APPROVE|MANUAL_APPROVAL|REJECT",
+              "reason": "Brief explanation of your decision based on Claude review and CI status",
+              "critical_issues": ["list", "of", "any", "blocking", "issues"],
+              "recommended_action": "auto-merge|manual-review|fix-issues"
+            }
+            ```
+
+            **IMPORTANT**: After providing your analysis, also write your JSON decision to a file for the workflow to process:
+            
+            Create a file in the merge decision directory with your exact JSON decision using this command:
+            ```bash
+            MERGE_RUN_DIR="/tmp/merge-decision-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            mkdir -p "$MERGE_RUN_DIR"
+            echo '{"decision": "MANUAL_APPROVAL", "reason": "Good code quality but needs human review", "critical_issues": [], "recommended_action": "manual-review"}' > "$MERGE_RUN_DIR/merge-decision.json"
+            ```
+            
+            Replace the values with your actual decision. This ensures the workflow can reliably access your decision.
+
+      - name: Parse merge decision
         id: parse-decision
         run: |
           echo "📋 Parsing merge decision..."
@@ -817,55 +928,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          REASON: ${{ steps.parse-decision.outputs.REASON }}
-          CRITICAL_ISSUES: ${{ steps.parse-decision.outputs.CRITICAL_ISSUES }}
-
-      - name: Create TODO list for rejected PR
-        if: steps.parse-decision.outputs.DECISION == 'REJECT'
-        run: |
-          echo "📝 Creating TODO list for rejected PR..."
-          
-          # Generate TODO list using simplified script
-          .github/scripts/generate-todo-list.sh "$REASON" "$CRITICAL_ISSUES"
-          
-          # Read the generated TODO content
-          TODO_CONTENT=$(cat /tmp/todo-items.md 2>/dev/null || echo "- [ ] **General**: Address the issues mentioned in the rejection reason above")
-          
-          # Post TODO list comment
-          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "## 🚫 PR Merge Request Changes - TODO List
-
-**Rejection Reason**: $REASON
-
-To get this PR approved for merge, please complete the following tasks:
-
-$TODO_CONTENT
-
----
-
-### ✅ **How to Use This TODO List:**
-1. **Complete each task** above by making the necessary changes
-2. **Check off completed items** by editing this comment and replacing \`[ ]\` with \`[x]\`
-3. **Request re-review** once all items are completed
-4. **The merge decision will be re-evaluated** when you push new changes
-
-### 🔄 **Re-evaluation Process:**
-- Push new commits to automatically trigger re-evaluation
-- The GitPlus AI will reassess based on updated CI results and Claude's review
-- This TODO list will remain as a reference for tracking progress
-
-### 💡 **Need Help?**
-- Check the detailed Claude code review above for specific guidance
-- Review CI/CD check failures for technical details
-- Consider breaking large changes into smaller, focused PRs
-
----
-*This TODO list was automatically generated by GitPlus AI • You can edit this comment to track your progress*"
-          
-          echo "✅ Posted TODO list comment on PR #$PR_NUMBER"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ needs.wait-for-checks.outputs.pr_number }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
           REASON: ${{ steps.parse-decision.outputs.REASON }}
           CRITICAL_ISSUES: ${{ steps.parse-decision.outputs.CRITICAL_ISSUES }}
 

@@ -99,9 +99,9 @@ jobs:
           
           echo "🔍 Waiting for Claude's comprehensive review to be posted..."
           
-          # Wait longer and poll multiple times for comprehensive review content
-          MAX_ATTEMPTS=${MAX_ATTEMPTS:-12}  # 2 minutes total (12 * 10 seconds), configurable via env
-          POLL_INTERVAL=${POLL_INTERVAL:-10}  # seconds between attempts, configurable via env
+          # Adaptive polling: shorter intervals initially, longer for later attempts
+          # Total timeout: ~2 minutes with efficient early detection
+          MAX_ATTEMPTS=${MAX_ATTEMPTS:-20}  # More attempts with adaptive intervals
           MIN_REVIEW_LENGTH=${MIN_REVIEW_LENGTH:-100}  # minimum characters for valid review
           ATTEMPT=1
           CLAUDE_REVIEW_CONTENT=""
@@ -131,7 +131,22 @@ jobs:
             fi
             
             if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
-              echo "⏳ Waiting $POLL_INTERVAL seconds before next attempt..."
+              # Adaptive polling intervals for efficiency:
+              # Attempts 1-5: 3s (quick detection for fast reviews)
+              # Attempts 6-10: 6s (moderate wait)
+              # Attempts 11-15: 10s (standard wait)
+              # Attempts 16-20: 15s (final attempts)
+              if [ $ATTEMPT -le 5 ]; then
+                POLL_INTERVAL=3
+              elif [ $ATTEMPT -le 10 ]; then
+                POLL_INTERVAL=6
+              elif [ $ATTEMPT -le 15 ]; then
+                POLL_INTERVAL=10
+              else
+                POLL_INTERVAL=15
+              fi
+              
+              echo "⏳ Waiting $POLL_INTERVAL seconds before next attempt (adaptive interval)..."
               sleep $POLL_INTERVAL
             fi
             ATTEMPT=$((ATTEMPT + 1))
