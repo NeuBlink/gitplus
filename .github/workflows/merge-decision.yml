@@ -21,8 +21,6 @@ permissions:
   checks: read
   statuses: write  # Required for creating commit status checks
   id-token: write
-  repository-projects: read  # For accessing project information
-  metadata: read  # For repository metadata access
 
 jobs:
   wait-for-checks:
@@ -236,7 +234,6 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           use_sticky_comment: true
-          # Allow Claude to run specific commands including file operations
           allowed_tools: "Bash,Write,Read"
           
           direct_prompt: |
