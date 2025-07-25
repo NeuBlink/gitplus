@@ -216,22 +216,7 @@ jobs:
                 echo "EOF" >> $GITHUB_OUTPUT
               else
                 echo "❌ No Claude review content found despite waiting for completion"
-                echo "CLAUDE_REVIEW_CONTENT=**No Claude Review Content Available**
-
-**Status**: Waited for claude-review to complete but no content was found.
-
-**Available Information**:
-- Claude review check status: $CLAUDE_RESULT
-- Wait-for-checks confirmed claude-review completed
-- No artifact file found
-- No Claude comments found
-
-**Analysis**: This may indicate:
-- Claude review workflow had internal issues
-- Artifact upload failed
-- Comment posting failed
-
-**Recommended Action**: MANUAL_APPROVAL - Human review needed to determine what happened and make merge decision." >> $GITHUB_OUTPUT
+                echo "CLAUDE_REVIEW_CONTENT=No Claude Review Content Available - Waited for claude-review to complete but no content was found. Status: $CLAUDE_RESULT. This may indicate workflow issues. Recommended: MANUAL_APPROVAL for human review." >> $GITHUB_OUTPUT
               fi
             fi
           fi
