@@ -149,29 +149,43 @@ jobs:
           CLAUDE_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "claude-review") | .state // "PENDING"')
           VALIDATE_RESULT=$(echo "$ALL_CHECKS" | jq -r '.[] | select(.name == "validate-pr") | .state // "PENDING"')
           
-          # Get complete Claude review comment (only after claude-review check is SUCCESS)
+          # Get complete Claude review content from artifact file (preferred method)
           if [ "$CLAUDE_RESULT" = "SUCCESS" ]; then
-            echo "🔍 Fetching complete Claude review comment..."
+            echo "🔍 Loading Claude review from artifact file..."
             
-            # Get all Claude comments and find the review comment (not task completion)
-            CLAUDE_REVIEW_COMMENT=$(gh pr view $PR_NUMBER \
-              --repo ${{ github.repository }} \
-              --json comments \
-              --jq '.comments[] | select(.author.login == "claude" and (.body | contains("Review Summary") or contains("## ") or contains("### ") or contains("####"))) | .body' \
-              | tail -n 1)
-            
-            if [ -n "$CLAUDE_REVIEW_COMMENT" ] && [ "$CLAUDE_REVIEW_COMMENT" != "null" ]; then
-              echo "✅ Found Claude review comment (${#CLAUDE_REVIEW_COMMENT} characters)"
+            if [ -f "/tmp/claude-review-analysis.md" ]; then
+              echo "✅ Found Claude review analysis file"
+              CLAUDE_REVIEW_CONTENT=$(cat /tmp/claude-review-analysis.md)
+              FILE_SIZE=$(wc -c < /tmp/claude-review-analysis.md)
+              echo "📄 Review file size: $FILE_SIZE characters"
+              echo "📝 Review preview: ${CLAUDE_REVIEW_CONTENT:0:200}..."
+              
               echo "CLAUDE_REVIEW_CONTENT<<EOF" >> $GITHUB_OUTPUT
-              echo "$CLAUDE_REVIEW_COMMENT" >> $GITHUB_OUTPUT
+              echo "$CLAUDE_REVIEW_CONTENT" >> $GITHUB_OUTPUT
               echo "EOF" >> $GITHUB_OUTPUT
             else
-              echo "⚠️ No Claude review comment found, using fallback"
-              echo "CLAUDE_REVIEW_CONTENT=No detailed review content available" >> $GITHUB_OUTPUT
+              echo "⚠️ Claude review file not found, falling back to comment parsing..."
+              
+              # Fallback: Get the most substantial Claude comment
+              CLAUDE_REVIEW_COMMENT=$(gh pr view $PR_NUMBER \
+                --repo ${{ github.repository }} \
+                --json comments \
+                --jq '.comments[] | select(.author.login == "claude" and (.body | length > 100)) | .body' \
+                | tail -n 1)
+              
+              if [ -n "$CLAUDE_REVIEW_COMMENT" ] && [ "$CLAUDE_REVIEW_COMMENT" != "null" ]; then
+                echo "✅ Found Claude review comment as fallback (${#CLAUDE_REVIEW_COMMENT} characters)"
+                echo "CLAUDE_REVIEW_CONTENT<<EOF" >> $GITHUB_OUTPUT
+                echo "$CLAUDE_REVIEW_COMMENT" >> $GITHUB_OUTPUT
+                echo "EOF" >> $GITHUB_OUTPUT
+              else
+                echo "❌ No Claude review content available"
+                echo "CLAUDE_REVIEW_CONTENT=No detailed review content available - neither file nor comment found" >> $GITHUB_OUTPUT
+              fi
             fi
           else
             echo "⚠️ Claude review not successful, no review content available"
-            echo "CLAUDE_REVIEW_CONTENT=Claude review check did not complete successfully" >> $GITHUB_OUTPUT
+            echo "CLAUDE_REVIEW_CONTENT=Claude review check did not complete successfully (status: $CLAUDE_RESULT)" >> $GITHUB_OUTPUT
           fi
           
           # Count passed/failed checks
@@ -197,6 +211,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+
+      - name: Download Claude review analysis
+        id: download-review
+        uses: actions/download-artifact@v4
+        with:
+          name: claude-review-analysis-${{ steps.pr-context.outputs.PR_NUMBER }}
+          path: /tmp/
+        continue-on-error: true
 
       - name: Make merge decision
         id: merge-decision
@@ -227,17 +249,24 @@ jobs:
             - **Failed Checks**: ${{ steps.pr-context.outputs.FAILED_CHECKS }}
 
             ## Complete Claude Code Review Analysis
+            **IMPORTANT: This is the full Claude review content that must guide your decision:**
+            
             ${{ steps.pr-context.outputs.CLAUDE_REVIEW_CONTENT }}
-
+            
             ## Your Task
-            Based on the complete context above, especially Claude's detailed review analysis, decide whether this PR should be merged.
+            Based on the complete context above, **especially Claude's detailed review analysis**, decide whether this PR should be merged.
 
-            **Decision Rules**:
-            - If the Claude review contains "DO NOT MERGE" or explicitly recommends against merging → REJECT
-            - If the Claude review approves changes or doesn't identify blocking issues → APPROVE  
-            - For Release Please PRs: APPROVE if all CI checks passed, otherwise REJECT
-            - For regular PRs: Follow Claude's review recommendations strictly
-            - If any critical CI checks failed → REJECT
+            **Decision Rules** (in priority order):
+            1. **Claude Review Override**: If the Claude review above contains "DO NOT MERGE", "REJECT", or explicitly recommends against merging → REJECT
+            2. **Critical CI Failures**: If any critical CI checks failed → REJECT
+            3. **Release Please PRs**: If Release Please PR and all CI checks passed → APPROVE
+            4. **Regular PRs**: Follow Claude's review recommendations:
+               - If Claude approves changes or finds no blocking issues → APPROVE
+               - If Claude identifies critical issues or concerns → REJECT
+               - If Claude requests changes → REJECT
+            5. **No Clear Guidance**: If unclear, err on the side of manual review → REJECT
+
+            **Critical**: Your decision must be based primarily on Claude's review content above. The CI status is secondary to Claude's analysis.
 
             **CRITICAL: You MUST respond with valid JSON in this exact format:**
             ```json
