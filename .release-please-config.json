@@ -3,6 +3,7 @@
     ".": {
       "package-name": "@neublink/gitplus",
       "release-type": "node",
+      "include-component-in-tag": false,
       "extra-files": [
         "README.md"
       ]
