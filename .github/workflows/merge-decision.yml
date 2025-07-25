@@ -174,18 +174,52 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --json title,body,mergeable,mergeStateStatus,isDraft,author,baseRefName,headRefName,commits)
           
+          # Extract user-controlled PR metadata
+          RAW_PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
+          RAW_PR_AUTHOR=$(echo "$PR_DATA" | jq -r '.author.login')
+          RAW_HEAD_BRANCH=$(echo "$PR_DATA" | jq -r '.headRefName')
+          RAW_BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')
+          
+          # Validate PR metadata using common validation script
+          # Note: We can't source the script directly in GitHub Actions without checkout,
+          # so we inline the validation logic here but keep it consistent with the script
+          
+          # Validate PR title
+          if [ -z "$RAW_PR_TITLE" ] || [ ${#RAW_PR_TITLE} -gt 200 ] || [[ "$RAW_PR_TITLE" =~ [\$\`\;] ]]; then
+            echo "❌ ERROR: PR title is invalid (empty, too long, or contains dangerous characters)"
+            exit 1
+          fi
+          
+          # Validate GitHub username format  
+          if [ -z "$RAW_PR_AUTHOR" ] || ! [[ "$RAW_PR_AUTHOR" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$ ]]; then
+            echo "❌ ERROR: PR author name does not match expected GitHub username format"
+            exit 1
+          fi
+          
+          # Validate branch names
+          if [ -z "$RAW_HEAD_BRANCH" ] || [ ${#RAW_HEAD_BRANCH} -gt 100 ] || [[ "$RAW_HEAD_BRANCH" =~ [\$\`\;] ]]; then
+            echo "❌ ERROR: Head branch name is invalid (empty, too long, or contains dangerous characters)"
+            exit 1
+          fi
+          
+          if [ -z "$RAW_BASE_BRANCH" ] || [ ${#RAW_BASE_BRANCH} -gt 100 ] || [[ "$RAW_BASE_BRANCH" =~ [\$\`\;] ]]; then
+            echo "❌ ERROR: Base branch name is invalid (empty, too long, or contains dangerous characters)"
+            exit 1
+          fi
+          
+          # Store sanitized values
           echo "PR_NUMBER=$PR_NUMBER" >> $GITHUB_OUTPUT
-          echo "PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')" >> $GITHUB_OUTPUT
+          echo "PR_TITLE=$RAW_PR_TITLE" >> $GITHUB_OUTPUT
           echo "PR_MERGEABLE=$(echo "$PR_DATA" | jq -r '.mergeable')" >> $GITHUB_OUTPUT
           echo "PR_MERGE_STATE=$(echo "$PR_DATA" | jq -r '.mergeStateStatus')" >> $GITHUB_OUTPUT
           echo "PR_IS_DRAFT=$(echo "$PR_DATA" | jq -r '.isDraft')" >> $GITHUB_OUTPUT
-          echo "PR_AUTHOR=$(echo "$PR_DATA" | jq -r '.author.login')" >> $GITHUB_OUTPUT
-          echo "BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')" >> $GITHUB_OUTPUT
-          echo "HEAD_BRANCH=$(echo "$PR_DATA" | jq -r '.headRefName')" >> $GITHUB_OUTPUT
+          echo "PR_AUTHOR=$RAW_PR_AUTHOR" >> $GITHUB_OUTPUT
+          echo "BASE_BRANCH=$RAW_BASE_BRANCH" >> $GITHUB_OUTPUT
+          echo "HEAD_BRANCH=$RAW_HEAD_BRANCH" >> $GITHUB_OUTPUT
           
-          # Check if this is a Release Please PR
-          AUTHOR=$(echo "$PR_DATA" | jq -r '.author.login')
-          HEAD_BRANCH=$(echo "$PR_DATA" | jq -r '.headRefName')
+          # Check if this is a Release Please PR (use sanitized variables)
+          AUTHOR="$RAW_PR_AUTHOR"
+          HEAD_BRANCH="$RAW_HEAD_BRANCH"
           IS_RELEASE_PLEASE="false"
           if [[ "$AUTHOR" == "app/github-actions" ]] && [[ "$HEAD_BRANCH" =~ ^release-please--[a-zA-Z0-9._-]{1,50}$ ]]; then
             IS_RELEASE_PLEASE="true"
@@ -918,12 +952,13 @@ jobs:
           HEAD_BRANCH=$(echo "$PR_DATA" | jq -r '.headRefName')
           
           echo "📋 PR Status Check:"
-          echo "  - State: $PR_STATE"
-          echo "  - Mergeable: $MERGEABLE"
-          echo "  - Merge State: $MERGE_STATE"
-          echo "  - Is Draft: $IS_DRAFT"
-          echo "  - Author: $PR_AUTHOR"
-          echo "  - Branch: $HEAD_BRANCH"
+          # Safely print user-controlled variables to prevent command injection
+          printf "  - State: %s\n" "$PR_STATE"
+          printf "  - Mergeable: %s\n" "$MERGEABLE"
+          printf "  - Merge State: %s\n" "$MERGE_STATE"
+          printf "  - Is Draft: %s\n" "$IS_DRAFT"
+          printf "  - Author: %s\n" "$PR_AUTHOR"
+          printf "  - Branch: %s\n" "$HEAD_BRANCH"
           
           # Check basic merge requirements
           if [ "$PR_STATE" != "OPEN" ]; then

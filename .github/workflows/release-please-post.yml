@@ -23,14 +23,28 @@ jobs:
     environment: release-please
     
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          
       - name: Validate Release Please PR
         run: |
           echo "🔍 Validating Release Please PR"
-          echo "PR Title: ${PR_TITLE}"
-          echo "PR Author: ${PR_AUTHOR}"
-          echo "PR Author Type: ${PR_AUTHOR_TYPE}"
-          echo "Head Branch: ${HEAD_BRANCH}"
-          echo "Base Branch: ${BASE_BRANCH}"
+          
+          # Use common validation script
+          source .github/scripts/validate-pr-metadata.sh
+          
+          # Validate PR metadata (allow GitHub Apps)
+          validate_pr_metadata "$PR_TITLE" "$PR_AUTHOR" "$HEAD_BRANCH" "$BASE_BRANCH" "true"
+          
+          # Safely print user-controlled variables to prevent command injection
+          safe_print "PR Title" "$PR_TITLE"
+          safe_print "PR Author" "$PR_AUTHOR"
+          safe_print "PR Author Type" "$PR_AUTHOR_TYPE"
+          safe_print "Head Branch" "$HEAD_BRANCH"
+          safe_print "Base Branch" "$BASE_BRANCH"
           
           # SECURITY NOTE: All user-controlled inputs (PR title, branch names) are safely
           # passed through environment variables to prevent code injection attacks.
