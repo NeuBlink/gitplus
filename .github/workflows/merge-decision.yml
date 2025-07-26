@@ -221,7 +221,7 @@ jobs:
           AUTHOR="$RAW_PR_AUTHOR"
           HEAD_BRANCH="$RAW_HEAD_BRANCH"
           IS_RELEASE_PLEASE="false"
-          if [[ "$AUTHOR" == "app/github-actions" ]] && [[ "$HEAD_BRANCH" =~ ^release-please--[a-zA-Z0-9._-]{1,50}$ ]]; then
+          if [[ "$AUTHOR" == "github-actions[bot]" ]] && [[ "$HEAD_BRANCH" =~ ^release-please--[a-zA-Z0-9._-]{1,50}$ ]]; then
             IS_RELEASE_PLEASE="true"
             echo "Detected Release Please PR"
           fi
@@ -325,7 +325,7 @@ jobs:
           echo "🔒 Validating Release Please PR security..."
           # Security validation: Strict author verification using environment variables
           
-          if [ "$AUTHOR" != "app/github-actions" ]; then
+          if [ "$AUTHOR" != "github-actions[bot]" ]; then
             echo "❌ SECURITY VIOLATION: Invalid Release Please author: $AUTHOR"
             echo "release_validation_passed=false" >> $GITHUB_OUTPUT
             exit 1
@@ -656,7 +656,7 @@ jobs:
           **Action**: $RECOMMENDED_ACTION  
           
           **Security Validation**: ✅ Passed
-          - Author verified: app/github-actions
+          - Author verified: github-actions[bot]
           - Branch pattern verified: release-please--*
           - File changes validated: Only safe release files
           
@@ -1068,7 +1068,7 @@ jobs:
           fi
           
           # Determine merge method
-          if [[ "$PR_AUTHOR" == "app/github-actions" ]] && [[ "$HEAD_BRANCH" =~ ^release-please--[a-zA-Z0-9._-]{1,50}$ ]]; then
+          if [[ "$PR_AUTHOR" == "github-actions[bot]" ]] && [[ "$HEAD_BRANCH" =~ ^release-please--[a-zA-Z0-9._-]{1,50}$ ]]; then
             echo "🔄 Release Please PR detected"
             echo "merge_method=squash" >> $GITHUB_OUTPUT
             echo "is_release=true" >> $GITHUB_OUTPUT
