@@ -166,8 +166,8 @@ export class IndexRecoveryStrategy extends BaseRecoveryStrategy {
       });
     } else {
       // Corrupted index - more risky
-      const dataLossRisk = options.preserveUncommitted ? 'moderate' : 'minimal';
-      const requiresConfirmation = options.requireConfirmation && dataLossRisk !== 'none';
+      const dataLossRisk: 'none' | 'minimal' | 'moderate' | 'high' = options.preserveUncommitted ? 'moderate' : 'minimal';
+      const requiresConfirmation = options.requireConfirmation;
 
       actions.push({
         strategy: RecoveryStrategy.SafeRepair,

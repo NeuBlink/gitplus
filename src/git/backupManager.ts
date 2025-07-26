@@ -265,8 +265,8 @@ export class BackupManager {
     return {
       totalSize,
       backupCount: backups.length,
-      oldestBackup: backups.length > 0 ? backups[backups.length - 1].createdAt : undefined,
-      newestBackup: backups.length > 0 ? backups[0].createdAt : undefined
+      oldestBackup: backups.length > 0 ? backups[backups.length - 1]?.createdAt : undefined,
+      newestBackup: backups.length > 0 ? backups[0]?.createdAt : undefined
     };
   }
 
@@ -528,7 +528,7 @@ export class BackupManager {
     try {
       const { stdout } = await execAsync(`du -sb "${backupPath}"`);
       const sizeMatch = stdout.match(/^(\d+)/);
-      return sizeMatch ? parseInt(sizeMatch[1]) : 0;
+      return sizeMatch?.[1] ? parseInt(sizeMatch[1]) : 0;
     } catch {
       return 0;
     }

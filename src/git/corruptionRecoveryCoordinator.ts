@@ -6,7 +6,8 @@ import {
   RecoveryAction,
   CorruptionType,
   CorruptionSeverity,
-  BackupInfo
+  BackupInfo,
+  RecoveryStrategy
 } from '../types';
 import { CorruptionDetector } from './corruptionDetector';
 import { RecoveryStrategyRegistry } from './recoveryStrategies';
@@ -102,7 +103,7 @@ export class CorruptionRecoveryCoordinator {
         } catch (error) {
           // If we can't generate actions for an issue, mark it as requiring manual intervention
           actions.push({
-            strategy: options.autoRepair ? 'auto_repair' : 'manual_intervention',
+            strategy: options.autoRepair ? RecoveryStrategy.AutoRepair : RecoveryStrategy.ManualIntervention,
             description: `Manual intervention required for ${issue.type}: ${error}`,
             commands: [],
             dataLossRisk: 'moderate',

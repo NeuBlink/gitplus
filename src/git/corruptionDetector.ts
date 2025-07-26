@@ -371,7 +371,7 @@ export class CorruptionDetector {
         const remotes = stdout.split('\n').filter(line => line.trim());
         for (const remote of remotes) {
           const urlMatch = remote.match(/\t(.+)\s+\((fetch|push)\)$/);
-          if (urlMatch) {
+          if (urlMatch?.[1]) {
             const url = urlMatch[1];
             if (!this.isValidGitURL(url)) {
               issues.push({

@@ -2006,6 +2006,29 @@ export class GitClient {
   }
 
   /**
+   * Extract error message from various error object formats
+   */
+  private extractErrorMessage(error: unknown): string {
+    if (typeof error === 'string') {
+      return error;
+    }
+    
+    if (error && typeof error === 'object') {
+      if ('stderr' in error && typeof (error as any).stderr === 'string') {
+        return (error as any).stderr;
+      }
+      if ('message' in error && typeof (error as any).message === 'string') {
+        return (error as any).message;
+      }
+      if ('stdout' in error && typeof (error as any).stdout === 'string') {
+        return (error as any).stdout;
+      }
+    }
+    
+    return String(error);
+  }
+
+  /**
    * Enhanced execute command with automatic corruption checking
    */
   async executeGitCommandSafe(
