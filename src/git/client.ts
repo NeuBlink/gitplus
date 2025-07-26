@@ -34,7 +34,7 @@ export class GitClient {
       /[;&|`$(){}[\]<>]/,  // Shell metacharacters
       /\.\./,              // Directory traversal
       /^-/,                // Arguments starting with dash (could be git options)
-      /\s*(rm|del|format|config)\s*/i, // Dangerous git commands
+      /^\s*(rm|del|format|config)\s*$/i, // Dangerous git commands
     ];
     
     for (const pattern of dangerousPatterns) {

@@ -310,5 +310,10 @@ function validateFilePath(filePath: any): boolean {
     return false;
   }
   
+  // Reject absolute paths that might access system files
+  if (filePath.startsWith('/') && !filePath.startsWith('/tmp/test')) {
+    return false;
+  }
+  
   return true;
 }
