@@ -190,8 +190,8 @@ jobs:
             exit 1
           fi
           
-          # Validate GitHub username format  
-          if [ -z "$RAW_PR_AUTHOR" ] || ! [[ "$RAW_PR_AUTHOR" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$ ]]; then
+          # Validate GitHub username format (allow bot usernames with square brackets)
+          if [ -z "$RAW_PR_AUTHOR" ] || ! [[ "$RAW_PR_AUTHOR" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-\[\]]{0,39}[a-zA-Z0-9\]])?$ ]]; then
             echo "❌ ERROR: PR author name does not match expected GitHub username format"
             exit 1
           fi
