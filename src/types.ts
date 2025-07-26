@@ -281,3 +281,127 @@ export interface ToolCallArguments {
   force?: boolean;
   [key: string]: unknown;
 }
+
+// Repository Corruption Recovery Types
+
+export enum CorruptionType {
+  // Object database corruption
+  CorruptObject = 'corrupt_object',
+  MissingObject = 'missing_object',
+  CorruptPackfile = 'corrupt_packfile',
+  
+  // Index corruption
+  CorruptIndex = 'corrupt_index',
+  InvalidIndex = 'invalid_index',
+  
+  // Reference corruption
+  CorruptRef = 'corrupt_ref',
+  DanglingRef = 'dangling_ref',
+  InvalidRefFormat = 'invalid_ref_format',
+  
+  // Lock file issues
+  StaleLockFile = 'stale_lock_file',
+  IndexLock = 'index_lock',
+  RefLock = 'ref_lock',
+  
+  // Incomplete operations
+  IncompleteRebase = 'incomplete_rebase',
+  IncompleteMerge = 'incomplete_merge',
+  IncompleteCherryPick = 'incomplete_cherry_pick',
+  IncompleteApply = 'incomplete_apply',
+  
+  // Configuration issues
+  CorruptConfig = 'corrupt_config',
+  InvalidRemote = 'invalid_remote',
+  
+  // Working directory issues
+  PermissionDenied = 'permission_denied',
+  DiskFull = 'disk_full',
+  FilesystemError = 'filesystem_error',
+}
+
+export enum CorruptionSeverity {
+  Low = 'low',
+  Medium = 'medium', 
+  High = 'high',
+  Critical = 'critical'
+}
+
+export interface CorruptionIssue {
+  type: CorruptionType;
+  severity: CorruptionSeverity;
+  description: string;
+  affectedFiles: string[];
+  detectedAt: Date;
+  autoRecoverable: boolean;
+  recommendedActions: string[];
+  potentialDataLoss: boolean;
+  backupRequired: boolean;
+}
+
+export interface CorruptionDetectionResult {
+  isCorrupted: boolean;
+  issues: CorruptionIssue[];
+  integrityScore: number; // 0-100
+  lastCheck: Date;
+  checkDuration: number; // milliseconds
+}
+
+export enum RecoveryStrategy {
+  AutoRepair = 'auto_repair',
+  SafeRepair = 'safe_repair',
+  ManualIntervention = 'manual_intervention',
+  BackupRestore = 'backup_restore',
+  DataReconstruction = 'data_reconstruction',
+  CleanSlate = 'clean_slate'
+}
+
+export interface RecoveryAction {
+  strategy: RecoveryStrategy;
+  description: string;
+  commands: string[];
+  dataLossRisk: 'none' | 'minimal' | 'moderate' | 'high';
+  successProbability: number; // 0-100
+  estimatedTime: number; // minutes
+  requiresBackup: boolean;
+  requiresUserConfirmation: boolean;
+}
+
+export interface RecoveryResult {
+  success: boolean;
+  appliedActions: RecoveryAction[];
+  resolvedIssues: CorruptionType[];
+  remainingIssues: CorruptionIssue[];
+  dataLoss: boolean;
+  lostData?: string[];
+  recoveryTime: number; // milliseconds
+  backupCreated?: string;
+  userMessages: string[];
+  nextSteps?: string[];
+}
+
+export interface BackupInfo {
+  id: string;
+  path: string;
+  createdAt: Date;
+  reason: string;
+  branchState: {
+    branch: string;
+    commit: string;
+    staged: string[];
+    unstaged: string[];
+    untracked: string[];
+  };
+  size: number; // bytes
+  compressed: boolean;
+}
+
+export interface RecoveryOptions {
+  maxDataLoss: 'none' | 'minimal' | 'moderate' | 'acceptable';
+  autoRepair: boolean;
+  createBackup: boolean;
+  preserveUncommitted: boolean;
+  aggressive: boolean;
+  timeoutMinutes: number;
+  requireConfirmation: boolean;
+}

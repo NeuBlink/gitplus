@@ -1,9 +1,12 @@
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
-import { GitStatus, CommitInfo, Platform, ConflictSection, ConflictResolutionResult, ConflictData, ErrorInfo, GitCommandResult } from '../types';
+import { GitStatus, CommitInfo, Platform, ConflictSection, ConflictResolutionResult, ConflictData, ErrorInfo, GitCommandResult, CorruptionDetectionResult, RecoveryOptions } from '../types';
 import { ProjectDetector, ProjectType } from '../utils/projectDetector';
 import { GitignoreManager } from '../utils/gitignoreManager';
 import type { ConflictResolution } from '../ai/service';
+import { CorruptionRecoveryCoordinator } from './corruptionRecoveryCoordinator';
+import { SecurityValidationResult, validateGitPath } from '../utils/pathSecurity';
+import { ErrorRecoveryGuide } from './errorRecoveryGuide';
 
 const execAsync = promisify(exec);
 
@@ -16,66 +19,197 @@ export class GitClient {
   private workingDirectory: string;
   private lastFetchTime: number = 0;
   private fetchCacheMs: number = 30000; // Cache fetch for 30 seconds
+  private isSecurityValidated: boolean = false;
+  private securityValidationResult?: SecurityValidationResult;
+  private recoveryCoordinator: CorruptionRecoveryCoordinator;
+  private corruptionCheckEnabled: boolean = true;
+  private lastCorruptionCheck: number = 0;
+  private corruptionCheckInterval: number = 300000; // 5 minutes
+  private errorRecoveryGuide: ErrorRecoveryGuide;
 
   constructor(workingDirectory: string = process.cwd()) {
+    // SECURITY: Store path without validation initially - validation happens on first operation
+    // This allows for async validation while maintaining backward compatibility
     this.workingDirectory = workingDirectory;
+    this.recoveryCoordinator = new CorruptionRecoveryCoordinator(workingDirectory);
+    this.errorRecoveryGuide = new ErrorRecoveryGuide();
   }
 
   /**
-   * Sanitize and validate git command arguments to prevent injection attacks
+   * SECURITY: Validate the working directory path before any git operations
+   * This method must be called before any git operations to ensure security
    */
-  private sanitizeGitArgument(arg: string): string {
+  private async validateWorkingDirectory(): Promise<void> {
+    if (this.isSecurityValidated) {
+      return; // Already validated
+    }
+
+    try {
+      const validationResult = await validateGitPath(this.workingDirectory);
+      
+      if (!validationResult.isValid) {
+        const violations = validationResult.violations.join(', ');
+        throw new Error(`Security validation failed for working directory: ${violations}`);
+      }
+      
+      // Update to use canonical path
+      this.workingDirectory = validationResult.canonicalPath;
+      this.securityValidationResult = validationResult;
+      this.isSecurityValidated = true;
+      
+      // Log security warnings
+      if (validationResult.warnings.length > 0) {
+        console.warn('[GitClient Security] Working directory warnings:', validationResult.warnings);
+      }
+      
+    } catch (error) {
+      throw new Error(`Failed to validate working directory security: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * SECURITY: Comprehensive input validation and sanitization for git arguments
+   * Prevents shell injection, command injection, and directory traversal attacks
+   */
+  private validateGitArgument(arg: string, context: 'command' | 'argument' | 'filepath' | 'message' = 'argument'): string {
     if (typeof arg !== 'string') {
       throw new Error('Git argument must be a string');
     }
     
-    // Check for dangerous characters and command injection patterns
-    const dangerousPatterns = [
-      /[;&|`$(){}[\]<>]/,  // Shell metacharacters
-      /\.\./,              // Directory traversal
-      /^-/,                // Arguments starting with dash (could be git options)
-      /^\s*(rm|del|format|config)\s*$/i, // Dangerous git commands
-    ];
+    // Validate argument length
+    const maxLengths = {
+      command: 50,
+      argument: 255,
+      filepath: 4096,
+      message: 2048
+    };
     
-    for (const pattern of dangerousPatterns) {
-      if (pattern.test(arg)) {
-        throw new Error(`Invalid git argument contains dangerous characters: ${arg}`);
-      }
+    if (arg.length > maxLengths[context]) {
+      throw new Error(`Git ${context} exceeds maximum length (${maxLengths[context]} characters)`);
     }
     
-    // Validate length to prevent extremely long arguments
-    if (arg.length > 255) {
-      throw new Error('Git argument exceeds maximum length');
+    // Check for null bytes (command injection vector)
+    if (arg.includes('\0')) {
+      throw new Error('Git argument contains null byte');
+    }
+    
+    // Context-specific validation
+    switch (context) {
+      case 'command':
+        return this.validateGitCommand(arg);
+      case 'filepath':
+        return this.validateFilePath(arg);
+      case 'message':
+        return this.validateCommitMessage(arg);
+      default:
+        return this.validateGenericArgument(arg);
+    }
+  }
+  
+  /**
+   * SECURITY: Validate git command names against whitelist
+   */
+  private validateGitCommand(command: string): string {
+    // Strict whitelist of allowed git commands
+    const allowedCommands = new Set([
+      'add', 'branch', 'checkout', 'commit', 'diff', 'fetch', 'log', 'merge',
+      'pull', 'push', 'rebase', 'reset', 'status', 'stash', 'show-ref', 
+      'rev-parse', 'rev-list', 'cherry-pick', 'reflog', 'clean', 'count-objects',
+      'symbolic-ref', 'remote', 'init', 'tag', 'config'
+    ]);
+    
+    // Extract base command (first word)
+    const parts = command.trim().toLowerCase().split(/\s+/);
+    const baseCommand = parts[0];
+    
+    if (!baseCommand || !allowedCommands.has(baseCommand)) {
+      throw new Error(`Git command not allowed: ${baseCommand || 'empty'}`);
+    }
+    
+    // Validate command format - no shell metacharacters
+    if (/[;&|`$(){}[\]<>\n\r]/.test(command)) {
+      throw new Error('Git command contains shell metacharacters');
+    }
+    
+    return command;
+  }
+  
+  /**
+   * SECURITY: Validate file paths to prevent directory traversal and injection
+   */
+  private validateFilePath(filepath: string): string {
+    // Check for directory traversal
+    if (/\.\.[\\/]/.test(filepath) || filepath.includes('../') || filepath.includes('..\\')) {
+      throw new Error('File path contains directory traversal sequence');
+    }
+    
+    // Check for absolute paths outside working directory (security risk)
+    if (filepath.startsWith('/') && !filepath.startsWith(this.workingDirectory)) {
+      throw new Error('Absolute file paths outside working directory not allowed');
+    }
+    
+    // Check for shell metacharacters in paths
+    if (/[;&|`$(){}[\]<>\n\r]/.test(filepath)) {
+      throw new Error('File path contains shell metacharacters');
+    }
+    
+    return filepath;
+  }
+  
+  /**
+   * SECURITY: Validate commit messages for injection attacks
+   */
+  private validateCommitMessage(message: string): string {
+    if (!message || message.trim().length === 0) {
+      throw new Error('Commit message cannot be empty');
+    }
+    
+    // Check for command injection patterns
+    if (/[;&|`$(){}[\]<>]/.test(message)) {
+      throw new Error('Commit message contains shell metacharacters');
+    }
+    
+    // Check for control characters
+    if (/[\x00-\x08\x0E-\x1F\x7F]/.test(message)) {
+      throw new Error('Commit message contains control characters');
+    }
+    
+    return message;
+  }
+  
+  /**
+   * SECURITY: Validate generic git arguments
+   */
+  private validateGenericArgument(arg: string): string {
+    // Check for shell metacharacters
+    if (/[;&|`$(){}[\]<>\n\r]/.test(arg)) {
+      throw new Error('Git argument contains shell metacharacters');
+    }
+    
+    // Prevent arguments that start with dashes (could be git options)
+    if (/^-/.test(arg)) {
+      throw new Error('Git argument starts with dash (potential option injection)');
     }
     
     return arg;
   }
 
   /**
-   * Build safe git command with properly escaped arguments
+   * SECURITY: Build safe git command arguments for spawn() execution
+   * Returns array of validated arguments - NEVER concatenates to strings
    */
-  private buildSafeGitCommand(command: string, args: string[] = []): string {
-    // Validate base command
-    const allowedCommands = [
-      'add', 'branch', 'checkout', 'commit', 'diff', 'fetch', 'log', 'merge',
-      'pull', 'push', 'rebase', 'reset', 'status', 'stash', 'show-ref', 
-      'rev-parse', 'rev-list', 'cherry-pick', 'reflog', 'clean', 'count-objects',
-      'symbolic-ref', 'remote'
-    ];
+  private buildSecureGitArgs(command: string, args: string[] = []): string[] {
+    // Validate command
+    const validatedCommand = this.validateGitArgument(command, 'command');
     
-    const baseCommand = command.split(' ')[0];
-    if (baseCommand && !allowedCommands.includes(baseCommand)) {
-      throw new Error(`Git command not allowed: ${baseCommand}`);
-    }
+    // Parse command into parts
+    const commandParts = validatedCommand.trim().split(/\s+/);
     
-    // Sanitize and escape all arguments
-    const sanitizedArgs = args.map(arg => {
-      const sanitized = this.sanitizeGitArgument(arg);
-      // Escape arguments that might contain spaces or special characters
-      return sanitized.includes(' ') || sanitized.includes('"') ? `"${sanitized.replace(/["\\]/g, '\\$&')}"` : sanitized;
-    });
+    // Validate all arguments
+    const validatedArgs = args.map(arg => this.validateGitArgument(arg, 'argument'));
     
-    return [command, ...sanitizedArgs].join(' ');
+    // Return as separate array elements (secure for spawn)
+    return [...commandParts, ...validatedArgs];
   }
 
   /**
@@ -135,16 +269,19 @@ export class GitClient {
   }
 
   /**
-   * Public method to execute git commands with safe argument handling
-   * This method should be used when direct command construction is needed
+   * SECURITY: Execute git commands with explicit argument separation
+   * This method provides maximum security by using spawn with argument arrays
    */
-  async executeSafeGitCommand(command: string, args: string[] = []): Promise<string> {
-    const safeCommand = this.buildSafeGitCommand(command, args);
-    return this.executeGitCommand(safeCommand);
+  async executeSecureGitCommand(command: string, args: string[] = []): Promise<string> {
+    const secureArgs = this.buildSecureGitArgs(command, args);
+    return this.executeGitCommandWithSpawn('git', secureArgs, {
+      cwd: this.workingDirectory,
+      timeout: 30000
+    });
   }
 
   /**
-   * Execute a git command safely and return the output
+   * SECURITY: Execute git command with comprehensive security controls
    * 
    * @param command - The git command to execute (without 'git' prefix)
    * @param options - Optional configuration for command execution
@@ -163,18 +300,31 @@ export class GitClient {
     command: string,
     options: GitCommandOptions = {}
   ): Promise<string> {
+    // SECURITY: Validate working directory before ANY git operations
+    await this.validateWorkingDirectory();
+    
     const { cwd = this.workingDirectory, timeout = 30000 } = options;
     
+    // SECURITY: If a custom cwd is provided, validate it as well
+    if (options.cwd && options.cwd !== this.workingDirectory) {
+      const cwdValidation = await validateGitPath(options.cwd, this.workingDirectory);
+      if (!cwdValidation.isValid) {
+        throw new Error(`Security validation failed for custom working directory: ${cwdValidation.violations.join(', ')}`);
+      }
+    }
+    
     try {
-      // SECURITY FIX: Use spawn with proper argument separation instead of shell interpolation
-      const args = command.trim().split(/\s+/);
-      const result = await this.executeGitCommandWithSpawn('git', args, { cwd, timeout });
+      // SECURITY: Build secure argument array - NO string concatenation
+      const secureArgs = this.buildSecureGitArgs(command, []);
+      const result = await this.executeGitCommandWithSpawn('git', secureArgs, { cwd, timeout });
       return result;
     } catch (error: unknown) {
-      // Handle git command errors
+      // Handle git command errors with enhanced recovery guidance
       if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
         throw new Error('Git is not installed or not found in PATH');
       }
+      
+      const errorMessage = this.extractErrorMessage(error);
       
       // Handle specific git warnings that shouldn't fail operations
       if (error && typeof error === 'object' && 'stderr' in error && typeof error.stderr === 'string') {
@@ -183,26 +333,56 @@ export class GitClient {
         // Common git warnings that we can ignore or handle gracefully
         if (stderr.includes('no upstream branch') || 
             stderr.includes('set-upstream')) {
-          // Return the stderr as output for upstream warnings
           return (error as any).stderr;
         }
         
         if (stderr.includes('nothing to commit') || 
             stderr.includes('working tree clean')) {
-          // Handle clean working tree
           return (error as any).stdout || (error as any).stderr;
         }
         
         if (stderr.includes('already exists') && command.includes('branch')) {
-          // Branch already exists
           throw new Error(`Branch already exists: ${(error as any).stderr}`);
         }
       }
       
+      // Check if this might be corruption-related
+      const corruptionCheck = this.errorRecoveryGuide.isCorruptionIndicator(errorMessage);
+      
+      if (corruptionCheck.isCorruption) {
+        // Provide enhanced error message with recovery guidance
+        const analysis = this.errorRecoveryGuide.analyzeError(errorMessage);
+        const userFriendlyMessage = this.errorRecoveryGuide.generateUserFriendlyErrorMessage(
+          errorMessage,
+          analysis.guidance
+        );
+        
+        // Create enhanced error with recovery information
+        const enhancedError = new Error(userFriendlyMessage);
+        (enhancedError as any).originalError = error;
+        (enhancedError as any).recoveryGuidance = analysis.guidance;
+        (enhancedError as any).quickFixes = this.errorRecoveryGuide.getQuickFixes(errorMessage);
+        (enhancedError as any).isCorruption = true;
+        (enhancedError as any).corruptionType = corruptionCheck.corruptionType;
+        
+        throw enhancedError;
+      }
+      
+      // For non-corruption errors, still provide basic guidance
       if (error && typeof error === 'object' && 'code' in error && error.code === 128) {
-        // Git command failed - provide more context
-        const gitError = (error as any).stderr || (error as any).message;
-        throw new Error(`Git command failed: ${gitError}`);
+        const analysis = this.errorRecoveryGuide.analyzeError(errorMessage);
+        const quickFixes = this.errorRecoveryGuide.getQuickFixes(errorMessage);
+        
+        let enhancedMessage = `Git command failed: ${errorMessage}`;
+        if (quickFixes.length > 0) {
+          enhancedMessage += `\n\nQuick fixes to try:\n${quickFixes.map(fix => `  • ${fix}`).join('\n')}`;
+        }
+        
+        const enhancedError = new Error(enhancedMessage);
+        (enhancedError as any).originalError = error;
+        (enhancedError as any).quickFixes = quickFixes;
+        
+        throw enhancedError;
       }
       
       throw error;
@@ -420,15 +600,32 @@ export class GitClient {
   }
 
   /**
-   * Get commit history
+   * SECURITY: Get commit history with validated parameters
    */
   async getCommitHistory(limit: number = 10, range?: string): Promise<CommitInfo[]> {
-    const rangeArg = range || `HEAD~${limit}..HEAD`;
-    const format = '--pretty=format:%H|%s|%an|%ad|%h';
-    const command = `log ${format} --date=iso ${rangeArg}`;
+    // SECURITY: Validate limit
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+      throw new Error('Invalid commit history limit');
+    }
+    
+    const args: string[] = ['log'];
+    args.push('--pretty=format:%H|%s|%an|%ad|%h');
+    args.push('--date=iso');
+    
+    if (range) {
+      // SECURITY: Validate range argument
+      const validatedRange = this.validateGitArgument(range, 'argument');
+      args.push(validatedRange);
+    } else {
+      args.push(`HEAD~${limit}..HEAD`);
+    }
     
     try {
-      const output = await this.executeGitCommand(command);
+      const command = args[0];
+      if (!command) {
+        throw new Error('No git command specified');
+      }
+      const output = await this.executeSecureGitCommand(command, args.slice(1));
       const lines = output.split('\n').filter(line => line.trim());
       
       return lines.map(line => {
@@ -447,7 +644,7 @@ export class GitClient {
   }
 
   /**
-   * Get git diff
+   * SECURITY: Get git diff with validated arguments
    */
   async getDiff(options: {
     staged?: boolean;
@@ -456,38 +653,50 @@ export class GitClient {
   } = {}): Promise<string> {
     const { staged = false, files = [], contextLines = 3 } = options;
     
-    let command = `diff -U${contextLines}`;
+    // SECURITY: Validate context lines
+    if (!Number.isInteger(contextLines) || contextLines < 0 || contextLines > 100) {
+      throw new Error('Invalid context lines value');
+    }
+    
+    const args: string[] = ['diff', `-U${contextLines}`];
+    
     if (staged) {
-      command += ' --cached';
+      args.push('--cached');
     }
     
     if (files.length > 0) {
-      command += ` -- ${files.join(' ')}`;
+      // SECURITY: Validate file paths
+      const validatedFiles = files.map(file => this.validateGitArgument(file, 'filepath'));
+      args.push('--', ...validatedFiles);
     }
     
     try {
-      return await this.executeGitCommand(command);
+      const command = args[0];
+      if (!command) {
+        throw new Error('No git command specified');
+      }
+      return await this.executeSecureGitCommand(command, args.slice(1));
     } catch {
       return '';
     }
   }
 
   /**
-   * Stage files with smart detection and .gitignore management
+   * SECURITY: Stage files with smart detection and secure argument handling
    */
   async add(files: string[] | 'all', options: { smart?: boolean } = {}): Promise<void> {
     const { smart = true } = options;
 
     if (files !== 'all') {
-      // If specific files are provided, stage them directly
-      const command = `add ${files.join(' ')}`;
-      await this.executeGitCommand(command);
+      // SECURITY: Validate and stage specific files using argument arrays
+      const validatedFiles = files.map(file => this.validateGitArgument(file, 'filepath'));
+      await this.executeSecureGitCommand('add', validatedFiles);
       return;
     }
 
     if (!smart) {
-      // If smart staging is disabled, use the old behavior
-      await this.executeGitCommand('add -A');
+      // If smart staging is disabled, use secure version
+      await this.executeSecureGitCommand('add', ['-A']);
       return;
     }
 
@@ -532,14 +741,16 @@ export class GitClient {
       !this.shouldIgnoreFile(file, ignorePatterns)
     );
 
-    // 6. Stage the filtered files
+    // 6. SECURITY: Stage files using secure argument arrays
     if (smartFilesToStage.length > 0) {
       // Stage files in batches to avoid command line length limits
       const batchSize = 50;
       for (let i = 0; i < smartFilesToStage.length; i += batchSize) {
         const batch = smartFilesToStage.slice(i, i + batchSize);
-        const escapedFiles = batch.map(file => `"${file}"`).join(' ');
-        await this.executeGitCommand(`add ${escapedFiles}`);
+        
+        // SECURITY: Validate all file paths and use argument arrays
+        const validatedFiles = batch.map(file => this.validateGitArgument(file, 'filepath'));
+        await this.executeSecureGitCommand('add', validatedFiles);
       }
     }
   }
@@ -585,7 +796,7 @@ export class GitClient {
   }
 
   /**
-   * Create a git commit with the specified message
+   * SECURITY: Create a git commit with comprehensive input validation
    * 
    * @param message - The commit message (must be non-empty, max 2048 characters)
    * @param options - Optional commit configuration
@@ -601,16 +812,14 @@ export class GitClient {
   async commit(message: string, options: { amend?: boolean } = {}): Promise<void> {
     const { amend = false } = options;
     
-    // Validate commit message
-    if (!message || typeof message !== 'string') {
-      throw new Error('Commit message must be a non-empty string');
-    }
-    if (message.length > 2048) {
-      throw new Error('Commit message exceeds maximum length (2048 characters)');
-    }
+    // SECURITY: Comprehensive message validation
+    const validatedMessage = this.validateGitArgument(message, 'message');
     
-    // SECURITY: Use spawn directly with proper argument array
-    const args = amend ? ['commit', '--amend', '-m', message] : ['commit', '-m', message];
+    // SECURITY: Build secure argument array - no string interpolation
+    const args = amend 
+      ? ['commit', '--amend', '-m', validatedMessage] 
+      : ['commit', '-m', validatedMessage];
+    
     await this.executeGitCommandWithSpawn('git', args, {
       cwd: this.workingDirectory,
       timeout: 30000
@@ -618,7 +827,7 @@ export class GitClient {
   }
 
   /**
-   * Push changes to remote
+   * SECURITY: Push changes to remote with secure argument handling
    */
   async push(options: {
     branch?: string;
@@ -627,42 +836,45 @@ export class GitClient {
   } = {}): Promise<void> {
     const { branch, force = false, setUpstream = false } = options;
     
-    let command = 'push';
-    const args: string[] = [];
+    const args: string[] = ['push'];
     
     if (force) {
-      command += ' --force';
+      args.push('--force');
     }
     
     if (setUpstream && branch) {
-      this.sanitizeGitArgument(branch); // Validate branch name
-      command += ' -u origin';
-      args.push(branch);
+      // SECURITY: Validate branch name
+      const validatedBranch = this.validateGitArgument(branch, 'argument');
+      args.push('-u', 'origin', validatedBranch);
     }
     
-    const safeCommand = this.buildSafeGitCommand(command, args);
-    await this.executeGitCommand(safeCommand);
+    const command = args[0];
+    if (!command) {
+      throw new Error('No git command specified');
+    }
+    await this.executeSecureGitCommand(command, args.slice(1));
   }
 
   /**
-   * Create a new branch
+   * SECURITY: Create a new branch with validated name
    */
   async createBranch(branchName: string, checkout: boolean = true): Promise<void> {
+    // SECURITY: Validate branch name
+    const validatedBranchName = this.validateGitArgument(branchName, 'argument');
+    
     if (checkout) {
-      const safeCommand = this.buildSafeGitCommand('checkout -b', [branchName]);
-      await this.executeGitCommand(safeCommand);
+      await this.executeSecureGitCommand('checkout', ['-b', validatedBranchName]);
     } else {
-      const safeCommand = this.buildSafeGitCommand('branch', [branchName]);
-      await this.executeGitCommand(safeCommand);
+      await this.executeSecureGitCommand('branch', [validatedBranchName]);
     }
   }
 
   /**
-   * Switch to a branch
+   * SECURITY: Switch to a branch with validated name
    */
   async checkout(branchName: string): Promise<void> {
-    const safeCommand = this.buildSafeGitCommand('checkout', [branchName]);
-    await this.executeGitCommand(safeCommand);
+    const validatedBranchName = this.validateGitArgument(branchName, 'argument');
+    await this.executeSecureGitCommand('checkout', [validatedBranchName]);
   }
 
   /**
@@ -683,12 +895,12 @@ export class GitClient {
   }
 
   /**
-   * Delete a branch
+   * SECURITY: Delete a branch with validated name
    */
   async deleteBranch(branchName: string, force: boolean = false): Promise<void> {
+    const validatedBranchName = this.validateGitArgument(branchName, 'argument');
     const flag = force ? '-D' : '-d';
-    const safeCommand = this.buildSafeGitCommand(`branch ${flag}`, [branchName]);
-    await this.executeGitCommand(safeCommand);
+    await this.executeSecureGitCommand('branch', [flag, validatedBranchName]);
   }
 
   /**
@@ -1282,7 +1494,7 @@ export class GitClient {
   }
 
   /**
-   * Stash changes
+   * SECURITY: Stash changes with comprehensive input validation
    */
   async stash(options: {
     message?: string;
@@ -1305,40 +1517,56 @@ export class GitClient {
       stashIndex
     } = options;
 
-    let command = 'stash';
+    const args: string[] = ['stash'];
 
     if (list) {
-      command += ' list';
+      args.push('list');
     } else if (pop) {
-      command += ' pop';
+      args.push('pop');
       if (stashIndex !== undefined) {
-        command += ` stash@{${stashIndex}}`;
+        // SECURITY: Validate stash index
+        if (!Number.isInteger(stashIndex) || stashIndex < 0 || stashIndex > 999) {
+          throw new Error('Invalid stash index');
+        }
+        args.push(`stash@{${stashIndex}}`);
       }
     } else if (apply) {
-      command += ' apply';
+      args.push('apply');
       if (stashIndex !== undefined) {
-        command += ` stash@{${stashIndex}}`;
+        if (!Number.isInteger(stashIndex) || stashIndex < 0 || stashIndex > 999) {
+          throw new Error('Invalid stash index');
+        }
+        args.push(`stash@{${stashIndex}}`);
       }
     } else if (drop) {
-      command += ' drop';
+      args.push('drop');
       if (stashIndex !== undefined) {
-        command += ` stash@{${stashIndex}}`;
+        if (!Number.isInteger(stashIndex) || stashIndex < 0 || stashIndex > 999) {
+          throw new Error('Invalid stash index');
+        }
+        args.push(`stash@{${stashIndex}}`);
       }
     } else {
       // Default stash push
-      command += ' push';
+      args.push('push');
       if (message) {
-        command += ` -m "${message}"`;
+        // SECURITY: Validate stash message
+        const validatedMessage = this.validateGitArgument(message, 'message');
+        args.push('-m', validatedMessage);
       }
       if (includeUntracked) {
-        command += ' --include-untracked';
+        args.push('--include-untracked');
       }
       if (keepIndex) {
-        command += ' --keep-index';
+        args.push('--keep-index');
       }
     }
 
-    return await this.executeGitCommand(command);
+    const command = args[0];
+    if (!command) {
+      throw new Error('No git command specified');
+    }
+    return await this.executeSecureGitCommand(command, args.slice(1));
   }
 
   /**
@@ -1576,5 +1804,245 @@ export class GitClient {
    */
   getWorkingDirectory(): string {
     return this.workingDirectory;
+  }
+
+  // Corruption Recovery Methods
+
+  /**
+   * Enable or disable automatic corruption checking
+   */
+  setCorruptionCheckEnabled(enabled: boolean): void {
+    this.corruptionCheckEnabled = enabled;
+  }
+
+  /**
+   * Perform automatic corruption check if needed (called before critical operations)
+   */
+  private async performAutomaticCorruptionCheck(): Promise<void> {
+    if (!this.corruptionCheckEnabled) return;
+    
+    const now = Date.now();
+    if (now - this.lastCorruptionCheck < this.corruptionCheckInterval) {
+      return; // Skip check if recently performed
+    }
+
+    try {
+      const quickCheck = await this.recoveryCoordinator.quickCorruptionCheck();
+      this.lastCorruptionCheck = now;
+
+      if (quickCheck.isCorrupted && !quickCheck.canContinue) {
+        const criticalIssueTypes = quickCheck.criticalIssues.map(i => i.type).join(', ');
+        throw new Error(
+          `Repository corruption detected: ${criticalIssueTypes}. ` +
+          'Run corruption recovery before continuing.'
+        );
+      }
+    } catch (error) {
+      // Log but don't fail the operation for corruption check errors
+      if (process.env['GITPLUS_DEBUG'] === 'true') {
+        console.warn('Automatic corruption check failed:', error);
+      }
+    }
+  }
+
+  /**
+   * Perform comprehensive repository corruption detection
+   */
+  async detectCorruption(): Promise<CorruptionDetectionResult> {
+    return this.recoveryCoordinator.detectCorruption();
+  }
+
+  /**
+   * Recover from repository corruption with automatic detection and recovery
+   */
+  async recoverFromCorruption(options?: Partial<RecoveryOptions>): Promise<{
+    success: boolean;
+    recoveryResult?: any;
+    message: string;
+  }> {
+    try {
+      // Use default recovery options with user overrides
+      const defaultOptions: RecoveryOptions = {
+        maxDataLoss: 'minimal',
+        autoRepair: true,
+        createBackup: true,
+        preserveUncommitted: true,
+        aggressive: false,
+        timeoutMinutes: 30,
+        requireConfirmation: false
+      };
+
+      const recoveryOptions = { ...defaultOptions, ...options };
+
+      // Detect corruption
+      const detectionResult = await this.recoveryCoordinator.detectCorruption();
+      
+      if (!detectionResult.isCorrupted) {
+        return {
+          success: true,
+          message: 'No corruption detected - repository is healthy'
+        };
+      }
+
+      // Get recovery recommendations
+      const recommendations = await this.recoveryCoordinator.getRecoveryRecommendations(detectionResult);
+      
+      if (!recommendations.canProceed && !recoveryOptions.aggressive) {
+        return {
+          success: false,
+          message: `Critical corruption detected. ${recommendations.warningMessage || 'Manual intervention required.'}`
+        };
+      }
+
+      // Create recovery plan
+      const plan = await this.recoveryCoordinator.createRecoveryPlan(detectionResult, recoveryOptions);
+
+      // Execute recovery
+      const recoveryResult = await this.recoveryCoordinator.executeRecoveryPlan(plan, recoveryOptions);
+
+      return {
+        success: recoveryResult.success,
+        recoveryResult,
+        message: recoveryResult.success 
+          ? 'Repository corruption recovery completed successfully'
+          : 'Recovery completed with issues - manual intervention may be required'
+      };
+
+    } catch (error) {
+      return {
+        success: false,
+        message: `Recovery failed: ${error}`
+      };
+    }
+  }
+
+  /**
+   * Create a backup of the repository
+   */
+  async createBackup(reason: string, options?: {
+    includeWorkingDirectory?: boolean;
+    compress?: boolean;
+  }): Promise<{ success: boolean; backupId?: string; message: string }> {
+    try {
+      const backupManager = this.recoveryCoordinator.getBackupManager();
+      const backupInfo = await backupManager.createBackup({
+        reason,
+        includeWorkingDirectory: options?.includeWorkingDirectory ?? true,
+        compress: options?.compress ?? true,
+        maxBackups: 10
+      });
+
+      return {
+        success: true,
+        backupId: backupInfo.id,
+        message: `Backup created successfully: ${backupInfo.id}`
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Backup creation failed: ${error}`
+      };
+    }
+  }
+
+  /**
+   * List available backups
+   */
+  async listBackups(): Promise<Array<{
+    id: string;
+    createdAt: Date;
+    reason: string;
+    size: number;
+    branch: string;
+    commit: string;
+  }>> {
+    try {
+      const backupManager = this.recoveryCoordinator.getBackupManager();
+      const backups = await backupManager.listBackups();
+      
+      return backups.map(backup => ({
+        id: backup.id,
+        createdAt: backup.createdAt,
+        reason: backup.reason,
+        size: backup.size,
+        branch: backup.branchState.branch,
+        commit: backup.branchState.commit
+      }));
+    } catch (error) {
+      return [];
+    }
+  }
+
+  /**
+   * Restore from a backup
+   */
+  async restoreFromBackup(
+    backupId: string, 
+    options?: {
+      preserveCurrentChanges?: boolean;
+      targetBranch?: string;
+    }
+  ): Promise<{ success: boolean; message: string; warnings?: string[] }> {
+    try {
+      const backupManager = this.recoveryCoordinator.getBackupManager();
+      const result = await backupManager.restoreFromBackup(backupId, {
+        preserveCurrentChanges: options?.preserveCurrentChanges ?? true,
+        targetBranch: options?.targetBranch
+      });
+
+      return {
+        success: result.success,
+        message: result.success 
+          ? `Repository restored from backup ${backupId}`
+          : `Restore failed for backup ${backupId}`,
+        warnings: result.warnings
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Restore failed: ${error}`
+      };
+    }
+  }
+
+  /**
+   * Enhanced execute command with automatic corruption checking
+   */
+  async executeGitCommandSafe(
+    command: string,
+    options: GitCommandOptions = {}
+  ): Promise<string> {
+    // Perform automatic corruption check before critical operations
+    const criticalCommands = ['commit', 'merge', 'rebase', 'reset --hard', 'checkout'];
+    const isCritical = criticalCommands.some(cmd => command.includes(cmd));
+    
+    if (isCritical) {
+      await this.performAutomaticCorruptionCheck();
+    }
+
+    try {
+      return await this.executeGitCommand(command, options);
+    } catch (error) {
+      // Check if error might be corruption-related
+      const errorMessage = error instanceof Error ? error.message.toLowerCase() : String(error);
+      const corruptionIndicators = [
+        'corrupt', 'bad object', 'broken', 'invalid', 'missing blob',
+        'loose object', 'pack', 'index file', 'unable to read'
+      ];
+
+      const mightBeCorruption = corruptionIndicators.some(indicator => 
+        errorMessage.includes(indicator)
+      );
+
+      if (mightBeCorruption) {
+        // Suggest corruption recovery
+        throw new Error(
+          `${error}\n\nThis error might indicate repository corruption. ` +
+          'Consider running corruption detection and recovery.'
+        );
+      }
+
+      throw error;
+    }
   }
 }
