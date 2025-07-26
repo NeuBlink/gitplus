@@ -551,12 +551,17 @@ export class PlatformManager {
         
         if (timedOut) return; // Already handled by timeout
         
-        if (code !== 0) {
+        // Special handling for auth status commands that might output to stderr
+        const isAuthCommand = args.includes('auth') && args.includes('status');
+        
+        if (code !== 0 && !isAuthCommand) {
           reject(new Error(`Command failed (exit code ${code}): ${stderr || 'No error message'}`));
           return;
         }
 
-        resolve(stdout);
+        // For auth commands, return combined output; otherwise just stdout
+        const output = isAuthCommand ? (stdout + stderr) : stdout;
+        resolve(output);
       });
 
       child.on('error', (error: Error) => {

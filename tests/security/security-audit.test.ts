@@ -156,7 +156,11 @@ describe('Security Audit Tests', () => {
       ];
 
       for (const config of invalidConfigs) {
-        const originalEnv = { ...process.env };
+        // Save original values for the specific keys we're modifying
+        const originalValues: Record<string, string | undefined> = {};
+        for (const key of Object.keys(config)) {
+          originalValues[key] = process.env[key];
+        }
         
         // Apply invalid config
         Object.assign(process.env, config);
@@ -165,8 +169,14 @@ describe('Security Audit Tests', () => {
           new AIService();
         }).toThrow();
         
-        // Restore environment
-        process.env = originalEnv;
+        // Restore environment properly
+        for (const [key, originalValue] of Object.entries(originalValues)) {
+          if (originalValue === undefined) {
+            delete process.env[key];
+          } else {
+            process.env[key] = originalValue;
+          }
+        }
       }
     });
 

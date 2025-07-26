@@ -91,7 +91,8 @@ export class AIService {
    * Validate and get Claude command from environment
    */
   private getValidatedClaudeCommand(): string {
-    const command = process.env['GITPLUS_CLAUDE_COMMAND'] || 'claude';
+    const envValue = process.env['GITPLUS_CLAUDE_COMMAND'];
+    const command = envValue !== undefined ? envValue : 'claude';
     if (typeof command !== 'string' || command.trim().length === 0) {
       throw new Error('GITPLUS_CLAUDE_COMMAND must be a non-empty string');
     }
@@ -102,7 +103,8 @@ export class AIService {
    * Validate and get AI model from environment
    */
   private getValidatedModel(): string {
-    const model = process.env['GITPLUS_MODEL'] || 'sonnet';
+    const envValue = process.env['GITPLUS_MODEL'];
+    const model = envValue !== undefined ? envValue : 'sonnet';
     const validModels = ['sonnet', 'haiku', 'opus'];
     if (!validModels.includes(model)) {
       throw new Error(`GITPLUS_MODEL must be one of: ${validModels.join(', ')}`);
@@ -114,7 +116,8 @@ export class AIService {
    * Validate and get timeout from environment
    */
   private getValidatedTimeout(): number {
-    const timeoutStr = process.env['GITPLUS_TIMEOUT'] || DEFAULT_TIMEOUT_MS.toString();
+    const envValue = process.env['GITPLUS_TIMEOUT'];
+    const timeoutStr = envValue !== undefined ? envValue : DEFAULT_TIMEOUT_MS.toString();
     const timeout = parseInt(timeoutStr, 10);
     
     if (isNaN(timeout)) {
@@ -136,7 +139,8 @@ export class AIService {
    * Validate and get max retries from environment
    */
   private getValidatedMaxRetries(): number {
-    const retriesStr = process.env['GITPLUS_MAX_RETRIES'] || DEFAULT_MAX_RETRIES.toString();
+    const envValue = process.env['GITPLUS_MAX_RETRIES'];
+    const retriesStr = envValue !== undefined ? envValue : DEFAULT_MAX_RETRIES.toString();
     const retries = parseInt(retriesStr, 10);
     
     if (isNaN(retries)) {
@@ -158,7 +162,8 @@ export class AIService {
    * Validate and get base retry delay from environment
    */
   private getValidatedBaseRetryDelay(): number {
-    const delayStr = process.env['GITPLUS_BASE_RETRY_DELAY'] || DEFAULT_BASE_RETRY_DELAY_MS.toString();
+    const envValue = process.env['GITPLUS_BASE_RETRY_DELAY'];
+    const delayStr = envValue !== undefined ? envValue : DEFAULT_BASE_RETRY_DELAY_MS.toString();
     const delay = parseInt(delayStr, 10);
     
     if (isNaN(delay)) {

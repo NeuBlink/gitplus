@@ -609,9 +609,12 @@ export class GitClient {
       throw new Error('Commit message exceeds maximum length (2048 characters)');
     }
     
-    const baseCommand = amend ? 'commit --amend -m' : 'commit -m';
-    const safeCommand = this.buildSafeGitCommand(baseCommand, [message]);
-    await this.executeGitCommand(safeCommand);
+    // SECURITY: Use spawn directly with proper argument array
+    const args = amend ? ['commit', '--amend', '-m', message] : ['commit', '-m', message];
+    await this.executeGitCommandWithSpawn('git', args, {
+      cwd: this.workingDirectory,
+      timeout: 30000
+    });
   }
 
   /**
