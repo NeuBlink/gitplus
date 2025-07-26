@@ -135,7 +135,7 @@ test_npm_backoff() {
 test_config_validation() {
     echo "📋 Testing configuration parameter validation..."
     
-    # Test valid configuration ranges
+    # Test valid configuration ranges using safe parsing
     test_cases=(
         "MAX_ATTEMPTS=10"
         "MAX_ATTEMPTS=30"
@@ -144,8 +144,33 @@ test_config_validation() {
     )
     
     for test_case in "${test_cases[@]}"; do
-        eval "$test_case"
-        echo "✅ Valid config: $test_case"
+        # SECURITY FIX: Replace dangerous eval with safe configuration parsing
+        case "$test_case" in
+            MAX_ATTEMPTS=*)
+                local max_attempts_value="${test_case#MAX_ATTEMPTS=}"
+                # Validate that value is a positive integer
+                if [[ "$max_attempts_value" =~ ^[0-9]+$ ]] && [ "$max_attempts_value" -gt 0 ] && [ "$max_attempts_value" -le 100 ]; then
+                    echo "✅ Valid config: $test_case"
+                else
+                    echo "❌ ERROR: Invalid MAX_ATTEMPTS value: $max_attempts_value"
+                    exit 1
+                fi
+                ;;
+            MIN_REVIEW_LENGTH=*)
+                local min_length_value="${test_case#MIN_REVIEW_LENGTH=}"
+                # Validate that value is a positive integer
+                if [[ "$min_length_value" =~ ^[0-9]+$ ]] && [ "$min_length_value" -gt 0 ] && [ "$min_length_value" -le 10000 ]; then
+                    echo "✅ Valid config: $test_case"
+                else
+                    echo "❌ ERROR: Invalid MIN_REVIEW_LENGTH value: $min_length_value"
+                    exit 1
+                fi
+                ;;
+            *)
+                echo "❌ ERROR: Unknown configuration parameter: $test_case"
+                exit 1
+                ;;
+        esac
     done
     
     echo "✅ Configuration validation test passed"

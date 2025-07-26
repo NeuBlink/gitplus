@@ -47,7 +47,50 @@ describe('ConflictResolver', () => {
       mockGitClient.merge.mockRejectedValue(mergeError);
       mockGitClient.getConflictedFiles.mockResolvedValue(['file1.ts', 'file2.ts']);
 
-      // Mock AI availability
+      // Mock AI availability and successful resolution via gitClient.resolveConflicts
+      mockAIService.isAvailable.mockResolvedValue(true);
+      mockGitClient.resolveConflicts.mockResolvedValue({
+        success: true,
+        resolvedFiles: ['file1.ts', 'file2.ts'],
+        remainingConflicts: [],
+        confidence: 85,
+        reasoning: 'Simple merge conflicts in configuration files',
+        warnings: ['Manual review recommended for file2.ts']
+      });
+      
+      // Mock successful merge continuation and push
+      mockGitClient.continueMerge.mockResolvedValue(undefined);
+      mockGitClient.push.mockResolvedValue(undefined);
+
+      const result = await conflictResolver.resolvePRConflicts('feature-branch', 'main');
+
+      expect(result.hasConflicts).toBe(true);
+      expect(result.resolved).toBe(true); // Fully resolved since success: true
+      expect(result.steps).toContain('⚠️ PR has conflicts with main (2 files)');
+      expect(result.steps).toContain('✅ AI resolved 2 conflicts (85% confidence)');
+    });
+
+    it('should handle edge case: AI service unavailable', async () => {
+      // Mock fetch and merge with conflicts  
+      mockGitClient.fetch.mockResolvedValue('Fetched successfully');
+      const mergeError = new Error('Merge conflict detected');
+      mockGitClient.merge.mockRejectedValue(mergeError);
+      mockGitClient.getConflictedFiles.mockResolvedValue(['critical.ts']);
+
+      // Mock AI service unavailable
+      mockAIService.isAvailable.mockResolvedValue(false);
+
+      const result1 = await conflictResolver.resolvePRConflicts('feature-branch', 'main');
+
+      expect(result1.hasConflicts).toBe(true);
+      expect(result1.resolved).toBe(false);
+      expect(result1.error).toBe('AI resolution unavailable');
+      
+      // Reset mocks for second test - now mock 2 files for consistency
+      jest.clearAllMocks();
+      mockGitClient.fetch.mockResolvedValue('Fetched successfully');
+      mockGitClient.merge.mockRejectedValue(mergeError);
+      mockGitClient.getConflictedFiles.mockResolvedValue(['file1.ts', 'file2.ts']);
       mockAIService.isAvailable.mockResolvedValue(true);
 
       // Mock successful conflict resolution
@@ -66,14 +109,14 @@ describe('ConflictResolver', () => {
       // Mock successful push
       mockGitClient.push.mockResolvedValue(undefined);
 
-      const result = await conflictResolver.resolvePRConflicts('feature-branch', 'main');
+      const result2 = await conflictResolver.resolvePRConflicts('feature-branch', 'main');
 
-      expect(result.hasConflicts).toBe(true);
-      expect(result.resolved).toBe(true);
-      expect(result.steps).toContain('⚠️ PR has conflicts with main (2 files)');
-      expect(result.steps).toContain('🤖 Attempting AI-powered conflict resolution...');
-      expect(result.steps).toContain('✅ AI resolved 2 conflicts (95% confidence)');
-      expect(result.steps).toContain('✅ Updated PR with resolved conflicts');
+      expect(result2.hasConflicts).toBe(true);
+      expect(result2.resolved).toBe(true);
+      expect(result2.steps).toContain('⚠️ PR has conflicts with main (2 files)');
+      expect(result2.steps).toContain('🤖 Attempting AI-powered conflict resolution...');
+      expect(result2.steps).toContain('✅ AI resolved 2 conflicts (95% confidence)');
+      expect(result2.steps).toContain('✅ Updated PR with resolved conflicts');
     });
 
     it('should handle conflicts when AI resolution fails', async () => {

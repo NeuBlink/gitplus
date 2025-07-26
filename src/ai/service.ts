@@ -1,7 +1,16 @@
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
+import { ParsedClaudeResponse, ConflictData, ConflictResolutionResult, ResolvedConflictFile } from '../types';
 
 const execAsync = promisify(exec);
+
+// Constants for retry mechanism configuration
+const DEFAULT_TIMEOUT_MS = 120000; // 120 seconds
+const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_BASE_RETRY_DELAY_MS = 1000; // 1 second
+const MAX_RETRY_DELAY_MS = 30000; // 30 seconds maximum delay
+const RETRY_JITTER_FACTOR = 0.25; // ±25% random variation
+const EXPONENTIAL_BACKOFF_BASE = 2;
 
 export interface AIResponse {
   success: boolean;
@@ -45,29 +54,6 @@ export interface ComprehensiveAnalysis {
   pr: PRSuggestion;
 }
 
-export interface ConflictData {
-  files: string[];
-  conflictSections: ConflictSection[];
-  branch: string;
-  baseBranch: string;
-  commits: Array<{
-    hash: string;
-    message: string;
-    author: string;
-  }>;
-  fileTypes: string[];
-}
-
-export interface ConflictSection {
-  file: string;
-  startLine: number;
-  endLine: number;
-  oursContent: string;
-  theirsContent: string;
-  baseContent?: string;
-  context: string;
-}
-
 export interface ConflictResolution {
   strategy: 'auto' | 'manual' | 'escalate';
   resolvedFiles: ResolvedFile[];
@@ -84,13 +70,119 @@ export interface ResolvedFile {
   reasoning: string;
 }
 
+
 export class AIService {
-  private claudeCommand = process.env['GITPLUS_CLAUDE_COMMAND'] || 'claude';
-  private defaultModel = process.env['GITPLUS_MODEL'] || 'sonnet';
-  private timeout = parseInt(process.env['GITPLUS_TIMEOUT'] || '120000'); // 120 seconds
+  private claudeCommand: string;
+  private defaultModel: string;
+  private timeout: number;
+  private maxRetries: number;
+  private baseRetryDelay: number;
+
+  constructor() {
+    // Validate and set configuration from environment variables
+    this.claudeCommand = this.getValidatedClaudeCommand();
+    this.defaultModel = this.getValidatedModel();
+    this.timeout = this.getValidatedTimeout();
+    this.maxRetries = this.getValidatedMaxRetries();
+    this.baseRetryDelay = this.getValidatedBaseRetryDelay();
+  }
 
   /**
-   * Execute Claude CLI command with proper error handling
+   * Validate and get Claude command from environment
+   */
+  private getValidatedClaudeCommand(): string {
+    const envValue = process.env['GITPLUS_CLAUDE_COMMAND'];
+    const command = envValue !== undefined ? envValue : 'claude';
+    if (typeof command !== 'string' || command.trim().length === 0) {
+      throw new Error('GITPLUS_CLAUDE_COMMAND must be a non-empty string');
+    }
+    return command.trim();
+  }
+
+  /**
+   * Validate and get AI model from environment
+   */
+  private getValidatedModel(): string {
+    const envValue = process.env['GITPLUS_MODEL'];
+    const model = envValue !== undefined ? envValue : 'sonnet';
+    const validModels = ['sonnet', 'haiku', 'opus'];
+    if (!validModels.includes(model)) {
+      throw new Error(`GITPLUS_MODEL must be one of: ${validModels.join(', ')}`);
+    }
+    return model;
+  }
+
+  /**
+   * Validate and get timeout from environment
+   */
+  private getValidatedTimeout(): number {
+    const envValue = process.env['GITPLUS_TIMEOUT'];
+    const timeoutStr = envValue !== undefined ? envValue : DEFAULT_TIMEOUT_MS.toString();
+    const timeout = parseInt(timeoutStr, 10);
+    
+    if (isNaN(timeout)) {
+      throw new Error(`GITPLUS_TIMEOUT must be a valid number, got: ${timeoutStr}`);
+    }
+    
+    if (timeout < 1000) {
+      throw new Error('GITPLUS_TIMEOUT must be at least 1000ms (1 second)');
+    }
+    
+    if (timeout > 600000) {
+      throw new Error('GITPLUS_TIMEOUT must be at most 600000ms (10 minutes)');
+    }
+    
+    return timeout;
+  }
+
+  /**
+   * Validate and get max retries from environment
+   */
+  private getValidatedMaxRetries(): number {
+    const envValue = process.env['GITPLUS_MAX_RETRIES'];
+    const retriesStr = envValue !== undefined ? envValue : DEFAULT_MAX_RETRIES.toString();
+    const retries = parseInt(retriesStr, 10);
+    
+    if (isNaN(retries)) {
+      throw new Error(`GITPLUS_MAX_RETRIES must be a valid number, got: ${retriesStr}`);
+    }
+    
+    if (retries < 0) {
+      throw new Error('GITPLUS_MAX_RETRIES must be at least 0');
+    }
+    
+    if (retries > 10) {
+      throw new Error('GITPLUS_MAX_RETRIES must be at most 10');
+    }
+    
+    return retries;
+  }
+
+  /**
+   * Validate and get base retry delay from environment
+   */
+  private getValidatedBaseRetryDelay(): number {
+    const envValue = process.env['GITPLUS_BASE_RETRY_DELAY'];
+    const delayStr = envValue !== undefined ? envValue : DEFAULT_BASE_RETRY_DELAY_MS.toString();
+    const delay = parseInt(delayStr, 10);
+    
+    if (isNaN(delay)) {
+      throw new Error(`GITPLUS_BASE_RETRY_DELAY must be a valid number, got: ${delayStr}`);
+    }
+    
+    if (delay < 100) {
+      throw new Error('GITPLUS_BASE_RETRY_DELAY must be at least 100ms');
+    }
+    
+    if (delay > 10000) {
+      throw new Error('GITPLUS_BASE_RETRY_DELAY must be at most 10000ms (10 seconds)');
+    }
+    
+    return delay;
+  }
+
+  /**
+   * Execute Claude CLI command with retry logic and exponential backoff
    */
   private async executeClaudeCommand(
     prompt: string, 
@@ -98,80 +190,22 @@ export class AIService {
       model?: string;
       outputFormat?: 'text' | 'json';
       maxTokens?: number;
+      retryCount?: number;
     } = {}
   ): Promise<AIResponse> {
-    const { model = this.defaultModel, outputFormat = 'text' } = options;
+    const { model = this.defaultModel, outputFormat = 'text', retryCount = 0 } = options;
     
     try {
-      // Use spawn for better handling of large prompts
-      return new Promise<AIResponse>((resolve) => {
-        const args = ['-p', prompt, '--model', model, '--output-format', outputFormat];
-        
-        // console.log(`Executing Claude CLI: ${this.claudeCommand} ${args.slice(0, 2).join(' ')} ... (${prompt.length} chars)`);
-        
-        const child = spawn(this.claudeCommand, args, {
-          stdio: ['ignore', 'pipe', 'pipe'],
-          timeout: this.timeout
-        });
-
-        let stdout = '';
-        let stderr = '';
-
-        child.stdout.on('data', (data: Buffer) => {
-          stdout += data.toString();
-        });
-
-        child.stderr.on('data', (data: Buffer) => {
-          stderr += data.toString();
-        });
-
-        child.on('close', (code: number | null) => {
-          // console.log('Command output:', { stdoutLength: stdout?.length, stderrLength: stderr?.length, exitCode: code });
-          
-          if (code !== 0 && !stdout) {
-            resolve({
-              success: false,
-              content: '',
-              error: `Claude CLI error (exit code ${code}): ${stderr || 'Process failed with no error message'}`
-            });
-            return;
-          }
-
-          // Handle timeout specifically
-          if (code === null) {
-            resolve({
-              success: false,
-              content: '',
-              error: `Claude CLI timeout after ${this.timeout}ms`
-            });
-            return;
-          }
-
-          // Claude CLI often writes status messages to stderr even on success
-          // Only fail if there's no stdout content at all
-          if (!stdout || stdout.trim().length === 0) {
-            resolve({
-              success: false,
-              content: '',
-              error: `Claude CLI error: ${stderr || 'No output received from Claude API'}`
-            });
-            return;
-          }
-
-          resolve({
-            success: true,
-            content: stdout.trim()
-          });
-        });
-
-        child.on('error', (error: Error) => {
-          resolve({
-            success: false,
-            content: '',
-            error: `Failed to execute Claude CLI at ${this.claudeCommand}: ${error.message}. Check if Claude CLI is installed and in PATH.`
-          });
-        });
-      });
+      const result = await this.executeClaudeCommandAttempt(prompt, model, outputFormat);
+      
+      // If successful, return result
+      if (result.success) {
+        return result;
+      }
+      
+      // Handle retry logic for failed attempts
+      return await this.handleRetryLogic(result, prompt, options);
+      
     } catch (error: any) {
       return {
         success: false,
@@ -182,7 +216,420 @@ export class AIService {
   }
 
   /**
-   * Generate intelligent commit message using Claude following Conventional Commits spec
+   * Handle retry logic for failed Claude CLI attempts
+   */
+  private async handleRetryLogic(
+    failedResult: AIResponse,
+    prompt: string,
+    options: {
+      model?: string;
+      outputFormat?: 'text' | 'json';
+      maxTokens?: number;
+      retryCount?: number;
+    }
+  ): Promise<AIResponse> {
+    const { retryCount = 0 } = options;
+    
+    // Check if this is a retryable error
+    const isRetryable = this.isRetryableError(failedResult.error || '');
+    
+    // If not retryable or we've exceeded max retries, return the error
+    if (!isRetryable || retryCount >= this.maxRetries) {
+      return failedResult;
+    }
+    
+    // Execute retry with delay
+    await this.executeRetryDelay(retryCount, failedResult.error);
+    
+    // Retry with incremented count
+    return this.executeClaudeCommand(prompt, {
+      ...options,
+      retryCount: retryCount + 1
+    });
+  }
+
+  /**
+   * Execute retry delay with logging
+   */
+  private async executeRetryDelay(retryCount: number, error?: string): Promise<void> {
+    const delay = this.calculateRetryDelay(retryCount);
+    
+    // Log retry attempt for debugging (only in development)
+    if (this.shouldLogRetryAttempts()) {
+      console.log(`AI service retry ${retryCount + 1}/${this.maxRetries} after ${delay}ms: ${error}`);
+    }
+    
+    // Wait for the calculated delay
+    await this.sleep(delay);
+  }
+
+  /**
+   * Determine if retry attempts should be logged
+   */
+  private shouldLogRetryAttempts(): boolean {
+    return process.env['NODE_ENV'] === 'development' || process.env['GITPLUS_DEBUG'] === 'true';
+  }
+
+  /**
+   * Single attempt to execute Claude CLI command
+   */
+  private async executeClaudeCommandAttempt(
+    prompt: string,
+    model: string,
+    outputFormat: string
+  ): Promise<AIResponse> {
+    return new Promise<AIResponse>((resolve) => {
+      const args = ['-p', prompt, '--model', model, '--output-format', outputFormat];
+      
+      const child = spawn(this.claudeCommand, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: this.timeout
+      });
+
+      let stdout = '';
+      let stderr = '';
+      let isResolved = false;
+      let timeoutHandle: NodeJS.Timeout | null = null;
+
+      // Set up timeout handling for proper cleanup
+      if (this.timeout > 0) {
+        timeoutHandle = setTimeout(() => {
+          if (!isResolved) {
+            isResolved = true;
+            child.kill('SIGTERM');
+            resolve({
+              success: false,
+              content: '',
+              error: `Claude CLI timeout after ${this.timeout}ms`
+            });
+          }
+        }, this.timeout);
+      }
+
+      child.stdout.on('data', (data: Buffer) => {
+        stdout += data.toString();
+      });
+
+      child.stderr.on('data', (data: Buffer) => {
+        stderr += data.toString();
+      });
+
+      child.on('close', (code: number | null) => {
+        if (isResolved) return;
+        isResolved = true;
+        
+        // Clear timeout
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
+
+        if (code !== 0 && !stdout) {
+          resolve({
+            success: false,
+            content: '',
+            error: `Claude CLI error (exit code ${code}): ${stderr || 'Process failed with no error message'}`
+          });
+          return;
+        }
+
+        // Handle timeout specifically
+        if (code === null) {
+          resolve({
+            success: false,
+            content: '',
+            error: `Claude CLI timeout after ${this.timeout}ms`
+          });
+          return;
+        }
+
+        // Claude CLI often writes status messages to stderr even on success
+        if (!stdout || stdout.trim().length === 0) {
+          resolve({
+            success: false,
+            content: '',
+            error: `Claude CLI error: ${stderr || 'No output received from Claude API'}`
+          });
+          return;
+        }
+
+        resolve({
+          success: true,
+          content: stdout.trim()
+        });
+      });
+
+      child.on('error', (error: Error) => {
+        if (isResolved) return;
+        isResolved = true;
+        
+        // Clear timeout
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
+
+        resolve({
+          success: false,
+          content: '',
+          error: `Failed to execute Claude CLI at ${this.claudeCommand}: ${error.message}. Check if Claude CLI is installed and in PATH.`
+        });
+      });
+    });
+  }
+
+  /**
+   * Check if an error is retryable (transient failure)
+   */
+  private isRetryableError(error: string): boolean {
+    const retryablePatterns = [
+      /timeout/i,
+      /network/i,
+      /connection/i,
+      /rate limit/i,
+      /throttle/i,
+      /5\d\d/,  // 5xx HTTP errors
+      /temporarily unavailable/i,
+      /service unavailable/i,
+      /internal server error/i,
+      /bad gateway/i,
+      /gateway timeout/i
+    ];
+    
+    return retryablePatterns.some(pattern => pattern.test(error));
+  }
+
+  /**
+   * Calculate retry delay with exponential backoff and jitter
+   */
+  private calculateRetryDelay(retryCount: number): number {
+    // Exponential backoff: baseDelay * EXPONENTIAL_BACKOFF_BASE^retryCount
+    const exponentialDelay = this.baseRetryDelay * Math.pow(EXPONENTIAL_BACKOFF_BASE, retryCount);
+    
+    // Add jitter to prevent thundering herd (±RETRY_JITTER_FACTOR random variation)
+    const randomFactor = 1 + (Math.random() * 2 - 1) * RETRY_JITTER_FACTOR;
+    
+    // Cap at MAX_RETRY_DELAY_MS maximum
+    return Math.min(exponentialDelay * randomFactor, MAX_RETRY_DELAY_MS);
+  }
+
+  /**
+   * Sleep utility for retry delays
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Type guard to check if a value is a string
+   */
+  private isString(value: unknown): value is string {
+    return typeof value === 'string';
+  }
+
+  /**
+   * Type guard to check if a value is a boolean
+   */
+  private isBoolean(value: unknown): value is boolean {
+    return typeof value === 'boolean';
+  }
+
+  /**
+   * Type guard to check if a value is a number
+   */
+  private isNumber(value: unknown): value is number {
+    return typeof value === 'number';
+  }
+
+  /**
+   * Type guard to check if a value is an array
+   */
+  private isArray(value: unknown): value is unknown[] {
+    return Array.isArray(value);
+  }
+
+  /**
+   * Type guard to check if a value is an object
+   */
+  private isObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+  }
+
+  /**
+   * Safely get a string property from an object
+   */
+  private getString(obj: Record<string, unknown>, key: string, defaultValue = ''): string {
+    const value = obj[key];
+    return this.isString(value) ? value : defaultValue;
+  }
+
+  /**
+   * Safely get a boolean property from an object
+   */
+  private getBoolean(obj: Record<string, unknown>, key: string, defaultValue = false): boolean {
+    const value = obj[key];
+    return this.isBoolean(value) ? value : defaultValue;
+  }
+
+  /**
+   * Safely get a number property from an object
+   */
+  private getNumber(obj: Record<string, unknown>, key: string, defaultValue = 0): number {
+    const value = obj[key];
+    return this.isNumber(value) ? value : defaultValue;
+  }
+
+  /**
+   * Safely get an array property from an object
+   */
+  private getArray(obj: Record<string, unknown>, key: string, defaultValue: unknown[] = []): unknown[] {
+    const value = obj[key];
+    return this.isArray(value) ? value : defaultValue;
+  }
+
+  /**
+   * Safely get a string array property from an object
+   */
+  private getStringArray(obj: Record<string, unknown>, key: string, defaultValue: string[] = []): string[] {
+    const value = obj[key];
+    if (this.isArray(value)) {
+      return value.filter(this.isString);
+    }
+    return defaultValue;
+  }
+
+  /**
+   * Safely get an object property from an object
+   */
+  private getObject(obj: Record<string, unknown>, key: string, defaultValue: Record<string, unknown> = {}): Record<string, unknown> {
+    const value = obj[key];
+    return this.isObject(value) ? value : defaultValue;
+  }
+
+  /**
+   * Parse Claude CLI JSON response with wrapper handling and cleanup
+   */
+  private parseClaudeJSONResponse(content: string): Record<string, unknown> {
+    if (!content || typeof content !== 'string' || content.trim().length === 0) {
+      throw new Error('Empty or invalid AI response content');
+    }
+
+    let actualContent = content.trim();
+
+    // Handle Claude CLI wrapper responses with type safety
+    try {
+      const wrapper = JSON.parse(content);
+      
+      // Ensure wrapper is an object before accessing properties
+      if (this.isObject(wrapper)) {
+        // Handle different Claude CLI response types
+        if (this.getString(wrapper, 'type') === 'result') {
+          const subtype = this.getString(wrapper, 'subtype');
+          if (subtype === 'success' && wrapper['result']) {
+            // Ensure result is a string before using it
+            const result = wrapper['result'];
+            if (typeof result === 'string') {
+              actualContent = result;
+            }
+          } else if (subtype === 'error_during_execution') {
+            const errorMsg = this.getString(wrapper, 'error', 'Unknown execution error');
+            throw new Error(`Claude CLI execution error: ${errorMsg}`);
+          }
+        }
+      }
+    } catch (wrapperError) {
+      // If it's not a wrapper, continue with original content
+      // This is expected behavior for direct JSON responses
+      if (wrapperError instanceof Error && wrapperError.message.includes('Claude CLI execution error')) {
+        throw wrapperError; // Re-throw execution errors
+      }
+    }
+
+    // Clean up the content - remove markdown code blocks if present
+    let jsonContent = actualContent.trim();
+    
+    // Remove markdown code blocks with better type safety
+    const codeBlockMatch = jsonContent.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (codeBlockMatch && codeBlockMatch[1] && typeof codeBlockMatch[1] === 'string') {
+      jsonContent = codeBlockMatch[1].trim();
+    }
+    
+    // Find JSON object boundaries with validation
+    const jsonStart = jsonContent.indexOf('{');
+    const jsonEnd = jsonContent.lastIndexOf('}');
+    
+    if (jsonStart === -1 || jsonEnd === -1 || jsonStart >= jsonEnd) {
+      throw new Error('No valid JSON object found in AI response');
+    }
+    
+    jsonContent = jsonContent.substring(jsonStart, jsonEnd + 1);
+    
+    // Validate JSON content is not empty after cleanup
+    if (!jsonContent || jsonContent.trim().length < 2) {
+      throw new Error('JSON content is empty after cleanup');
+    }
+    
+    try {
+      const parsed = JSON.parse(jsonContent);
+      
+      // Ensure the parsed result is an object
+      if (!this.isObject(parsed)) {
+        throw new Error('Parsed JSON is not an object');
+      }
+      
+      return parsed;
+    } catch (parseError) {
+      const errorMessage = parseError instanceof Error ? parseError.message : 'Unknown parse error';
+      throw new Error(`Failed to parse JSON response: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * Validate required fields in parsed AI response
+   */
+  private validateRequiredFields(parsed: Record<string, unknown>, requiredFields: string[], context: string): void {
+    const missingFields = requiredFields.filter(field => {
+      const keys = field.split('.');
+      let current: unknown = parsed;
+      for (const key of keys) {
+        if (!this.isObject(current) || !(key in current)) {
+          return true;
+        }
+        current = current[key];
+      }
+      return false;
+    });
+
+    if (missingFields.length > 0) {
+      throw new Error(`AI response for ${context} missing required fields: ${missingFields.join(', ')}`);
+    }
+  }
+
+  /**
+   * Generate intelligent commit message using Claude AI following Conventional Commits specification
+   * 
+   * @param context - Git repository context for commit message generation
+   * @param context.diff - Git diff output showing changes to be committed
+   * @param context.filesChanged - Array of file paths that have changed
+   * @param context.status - Git status with staged, unstaged, and untracked files
+   * @param context.recentCommits - Optional recent commit history for context
+   * @param context.projectType - Optional project type hint (e.g., 'node', 'python')
+   * @returns Promise resolving to commit suggestion or null if generation fails
+   * 
+   * @example
+   * ```typescript
+   * const suggestion = await aiService.generateCommitMessage({
+   *   diff: gitDiff,
+   *   filesChanged: ['src/auth.ts', 'tests/auth.test.ts'],
+   *   status: gitStatus,
+   *   recentCommits: recentCommits
+   * });
+   * 
+   * if (suggestion) {
+   *   console.log(`Suggested: ${suggestion.message}`);
+   *   console.log(`Type: ${suggestion.type}, Breaking: ${suggestion.breaking}`);
+   * }
+   * ```
    */
   async generateCommitMessage(context: {
     diff: string;
@@ -282,76 +729,34 @@ ANALYZE THE CHANGES AND GENERATE THE MOST APPROPRIATE CONVENTIONAL COMMIT MESSAG
     }
 
     try {
-      // Parse Claude CLI wrapper response
-      let actualContent = response.content;
-      try {
-        const wrapper = JSON.parse(response.content);
-        if (wrapper.type === 'result' && wrapper.subtype === 'success' && wrapper.result) {
-          actualContent = wrapper.result;
-        } else if (wrapper.subtype === 'error_during_execution') {
-          console.error('Claude CLI execution error for commit message:', wrapper.error || 'Unknown execution error');
-          return null;
-        }
-      } catch (wrapperError) {
-        // Not a wrapper, use content directly
-        console.debug('Not a Claude CLI wrapper response, using content directly');
+      const parsed = this.parseClaudeJSONResponse(response.content);
+      
+      // Validate required fields
+      this.validateRequiredFields(parsed, ['type', 'message'], 'commit message generation');
+      
+      // Handle breaking changes in message format
+      let message = this.getString(parsed, 'message');
+      const breaking = this.getBoolean(parsed, 'breaking');
+      const type = this.getString(parsed, 'type');
+      const scope = this.getString(parsed, 'scope');
+      
+      if (breaking && type && scope) {
+        // Add ! for breaking changes: type(scope)!: description
+        message = message.replace(/^(\w+)(\([^)]+\))(:)/, '$1$2!$3');
+      } else if (breaking && type) {
+        // Add ! for breaking changes: type!: description
+        message = message.replace(/^(\w+)(:)/, '$1!$2');
       }
       
-      // Clean up the content and extract JSON
-      let jsonContent = actualContent.trim();
-      
-      // Remove code blocks if present
-      const codeBlockMatch = jsonContent.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-      if (codeBlockMatch && codeBlockMatch[1]) {
-        jsonContent = codeBlockMatch[1].trim();
-      }
-      
-      // Extract JSON object
-      const jsonStart = jsonContent.indexOf('{');
-      const jsonEnd = jsonContent.lastIndexOf('}');
-      
-      if (jsonStart !== -1 && jsonEnd !== -1 && jsonStart < jsonEnd) {
-        jsonContent = jsonContent.substring(jsonStart, jsonEnd + 1);
-        
-        let parsed;
-        try {
-          parsed = JSON.parse(jsonContent);
-        } catch (jsonError) {
-          console.error('Invalid JSON in AI response for commit message:', jsonError instanceof Error ? jsonError.message : 'Unknown parse error');
-          console.error('JSON content sample:', jsonContent.substring(0, 200));
-          return null;
-        }
-        
-        // Validate required fields
-        if (!parsed.type || !parsed.message) {
-          console.error('AI response missing required fields (type, message):', parsed);
-          return null;
-        }
-        
-        // Handle breaking changes in message format
-        let message = parsed.message || '';
-        if (parsed.breaking && parsed.type && parsed.scope) {
-          // Add ! for breaking changes: type(scope)!: description
-          message = message.replace(/^(\w+)(\([^)]+\))(:)/, '$1$2!$3');
-        } else if (parsed.breaking && parsed.type) {
-          // Add ! for breaking changes: type!: description
-          message = message.replace(/^(\w+)(:)/, '$1!$2');
-        }
-        
-        return {
-          message,
-          type: parsed.type || 'chore',
-          scope: parsed.scope,
-          description: parsed.description || '',
-          breaking: parsed.breaking || false,
-          body: parsed.body,
-          footer: parsed.footer
-        };
-      }
-      
-      console.error('No valid JSON found in commit message response');
-      console.error('Response content sample:', actualContent.substring(0, 500));
-      return null;
+      return {
+        message,
+        type: type || 'chore',
+        scope: scope || undefined,
+        description: this.getString(parsed, 'description'),
+        breaking,
+        body: this.getString(parsed, 'body') || undefined,
+        footer: this.getString(parsed, 'footer') || undefined
+      };
     } catch (error) {
       console.error('Failed to parse AI response:', error instanceof Error ? error.message : 'Unknown error');
       console.error('Raw content sample:', response.content.substring(0, 500));
@@ -400,14 +805,16 @@ Rules:
     }
 
     try {
-      const parsed = JSON.parse(response.content);
+      const parsed = this.parseClaudeJSONResponse(response.content);
+      this.validateRequiredFields(parsed, ['name'], 'branch name generation');
+      
       return {
-        name: parsed.name || '',
-        description: parsed.description || '',
-        alternative: parsed.alternative
+        name: this.getString(parsed, 'name'),
+        description: this.getString(parsed, 'description'),
+        alternative: this.getString(parsed, 'alternative') || undefined
       };
     } catch (error) {
-      console.error('Failed to parse AI response:', error);
+      console.error('Failed to parse AI response for branch name:', error instanceof Error ? error.message : 'Unknown error');
       return null;
     }
   }
@@ -471,15 +878,17 @@ Requirements:
     }
 
     try {
-      const parsed = JSON.parse(response.content);
+      const parsed = this.parseClaudeJSONResponse(response.content);
+      this.validateRequiredFields(parsed, ['title', 'description'], 'PR description generation');
+      
       return {
-        title: parsed.title || '',
-        description: parsed.description || '',
-        labels: parsed.labels || [],
-        reviewers: parsed.reviewers || []
+        title: this.getString(parsed, 'title'),
+        description: this.getString(parsed, 'description'),
+        labels: this.getStringArray(parsed, 'labels'),
+        reviewers: this.getStringArray(parsed, 'reviewers')
       };
     } catch (error) {
-      console.error('Failed to parse AI response:', error);
+      console.error('Failed to parse AI response for PR description:', error instanceof Error ? error.message : 'Unknown error');
       return null;
     }
   }
@@ -542,16 +951,20 @@ Consider:
     }
 
     try {
-      const parsed = JSON.parse(response.content);
+      const parsed = this.parseClaudeJSONResponse(response.content);
+      this.validateRequiredFields(parsed, ['changeType', 'impact', 'summary'], 'change analysis');
+      
+      const impact = this.getString(parsed, 'impact') as 'low' | 'medium' | 'high';
+      
       return {
-        changeType: parsed.changeType || 'chore',
-        impact: parsed.impact || 'medium',
-        risks: parsed.risks || [],
-        suggestions: parsed.suggestions || [],
-        summary: parsed.summary || ''
+        changeType: this.getString(parsed, 'changeType', 'chore'),
+        impact: ['low', 'medium', 'high'].includes(impact) ? impact : 'medium',
+        risks: this.getStringArray(parsed, 'risks'),
+        suggestions: this.getStringArray(parsed, 'suggestions'),
+        summary: this.getString(parsed, 'summary')
       };
     } catch (error) {
-      console.error('Failed to parse AI response:', error);
+      console.error('Failed to parse AI response for change analysis:', error instanceof Error ? error.message : 'Unknown error');
       return null;
     }
   }
@@ -644,87 +1057,67 @@ CRITICAL: Return ONLY the JSON object above. No markdown formatting, code blocks
     }
 
     try {
-      // console.log('Parsing comprehensive AI analysis');
+      const parsed = this.parseClaudeJSONResponse(response.content);
       
-      // Parse Claude CLI wrapper response
-      let actualContent = response.content;
-      try {
-        const wrapper = JSON.parse(response.content);
-        
-        // Handle different Claude CLI response types
-        if (wrapper.type === 'result') {
-          if (wrapper.subtype === 'success' && wrapper.result) {
-            actualContent = wrapper.result;
-          } else if (wrapper.subtype === 'error_during_execution') {
-            console.error('Claude CLI execution error:', wrapper);
-            return null;
-          }
-        }
-      } catch (wrapperError) {
-        // If it's not a wrapper, use content directly
-        // console.log('Not a Claude CLI wrapper, using content directly');
-      }
+      // Validate required nested fields
+      this.validateRequiredFields(parsed, [
+        'commit.message', 'commit.type', 
+        'branch.name', 
+        'analysis.changeType', 'analysis.impact', 'analysis.summary',
+        'pr.title', 'pr.description'
+      ], 'comprehensive analysis');
       
-      // Clean up the content - remove code blocks if present
-      let jsonContent = actualContent.trim();
-      
-      // Remove markdown code blocks
-      const codeBlockMatch = jsonContent.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-      if (codeBlockMatch && codeBlockMatch[1]) {
-        jsonContent = codeBlockMatch[1].trim();
-      }
-      
-      // Find JSON object boundaries
-      const jsonStart = jsonContent.indexOf('{');
-      const jsonEnd = jsonContent.lastIndexOf('}');
-      
-      if (jsonStart === -1 || jsonEnd === -1 || jsonStart >= jsonEnd) {
-        throw new Error('No valid JSON object found in response');
-      }
-      
-      jsonContent = jsonContent.substring(jsonStart, jsonEnd + 1);
-      
-      // console.log('Extracted JSON content length:', jsonContent.length);
-      
-      const parsed = JSON.parse(jsonContent);
+      // Extract nested objects safely
+      const commitObj = this.getObject(parsed, 'commit');
+      const branchObj = this.getObject(parsed, 'branch');
+      const analysisObj = this.getObject(parsed, 'analysis');
+      const prObj = this.getObject(parsed, 'pr');
       
       // Handle breaking changes in commit message format
-      let commitMessage = parsed.commit?.message || '';
-      if (parsed.commit?.breaking && parsed.commit?.type && parsed.commit?.scope) {
+      let commitMessage = this.getString(commitObj, 'message');
+      const commitBreaking = this.getBoolean(commitObj, 'breaking');
+      const commitType = this.getString(commitObj, 'type');
+      const commitScope = this.getString(commitObj, 'scope');
+      
+      if (commitBreaking && commitType && commitScope) {
         // Add ! for breaking changes: type(scope)!: description
         commitMessage = commitMessage.replace(/^(\w+)(\([^)]+\))(:)/, '$1$2!$3');
-      } else if (parsed.commit?.breaking && parsed.commit?.type) {
+      } else if (commitBreaking && commitType) {
         // Add ! for breaking changes: type!: description
         commitMessage = commitMessage.replace(/^(\w+)(:)/, '$1!$2');
       }
       
+      // Validate impact value
+      const impactValue = this.getString(analysisObj, 'impact') as 'low' | 'medium' | 'high';
+      const validImpact = ['low', 'medium', 'high'].includes(impactValue) ? impactValue : 'medium';
+      
       return {
         commit: {
           message: commitMessage,
-          type: parsed.commit?.type || 'chore',
-          scope: parsed.commit?.scope,
-          description: parsed.commit?.description || '',
-          breaking: parsed.commit?.breaking || false,
-          body: parsed.commit?.body,
-          footer: parsed.commit?.footer
+          type: commitType || 'chore',
+          scope: commitScope || undefined,
+          description: this.getString(commitObj, 'description'),
+          breaking: commitBreaking,
+          body: this.getString(commitObj, 'body') || undefined,
+          footer: this.getString(commitObj, 'footer') || undefined
         },
         branch: {
-          name: parsed.branch?.name || '',
-          description: parsed.branch?.description || '',
-          alternative: parsed.branch?.alternative
+          name: this.getString(branchObj, 'name'),
+          description: this.getString(branchObj, 'description'),
+          alternative: this.getString(branchObj, 'alternative') || undefined
         },
         analysis: {
-          changeType: parsed.analysis?.changeType || 'chore',
-          impact: parsed.analysis?.impact || 'medium',
-          risks: parsed.analysis?.risks || [],
-          suggestions: parsed.analysis?.suggestions || [],
-          summary: parsed.analysis?.summary || ''
+          changeType: this.getString(analysisObj, 'changeType', 'chore'),
+          impact: validImpact,
+          risks: this.getStringArray(analysisObj, 'risks'),
+          suggestions: this.getStringArray(analysisObj, 'suggestions'),
+          summary: this.getString(analysisObj, 'summary')
         },
         pr: {
-          title: parsed.pr?.title || '',
-          description: parsed.pr?.description || '',
-          labels: parsed.pr?.labels || [],
-          reviewers: parsed.pr?.reviewers || []
+          title: this.getString(prObj, 'title'),
+          description: this.getString(prObj, 'description'),
+          labels: this.getStringArray(prObj, 'labels'),
+          reviewers: this.getStringArray(prObj, 'reviewers')
         }
       };
     } catch (parseError) {
@@ -811,56 +1204,45 @@ IMPORTANT:
       }
 
       try {
-        // Parse the response similar to other AI methods
-        let actualContent = response.content;
+        const parsed = this.parseClaudeJSONResponse(response.content);
         
-        // Handle Claude CLI wrapper responses
-        try {
-          const wrapper = JSON.parse(response.content);
-          if (wrapper.type === 'result' && wrapper.subtype === 'success' && wrapper.result) {
-            actualContent = wrapper.result;
+        // Validate required fields for conflict resolution
+        this.validateRequiredFields(parsed, ['strategy', 'confidence', 'reasoning'], 'conflict resolution');
+        
+        const strategy = this.getString(parsed, 'strategy') as 'auto' | 'manual' | 'escalate';
+        const validStrategy = ['auto', 'manual', 'escalate'].includes(strategy) ? strategy : 'escalate';
+        
+        // Parse resolved files array
+        const resolvedFilesArray = this.getArray(parsed, 'resolvedFiles');
+        const resolvedFiles: ResolvedFile[] = resolvedFilesArray.map(item => {
+          if (this.isObject(item)) {
+            return {
+              path: this.getString(item, 'path'),
+              content: this.getString(item, 'content'),
+              changes: this.getString(item, 'changes'),
+              reasoning: this.getString(item, 'reasoning')
+            };
           }
-        } catch {
-          // Not a wrapper, use content directly
-        }
-        
-        // Clean up the content
-        let jsonContent = actualContent.trim();
-        
-        // Remove markdown code blocks if present
-        const codeBlockMatch = jsonContent.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-        if (codeBlockMatch && codeBlockMatch[1]) {
-          jsonContent = codeBlockMatch[1].trim();
-        }
-        
-        // Find JSON boundaries
-        const jsonStart = jsonContent.indexOf('{');
-        const jsonEnd = jsonContent.lastIndexOf('}');
-        
-        if (jsonStart === -1 || jsonEnd === -1 || jsonStart >= jsonEnd) {
-          throw new Error('No valid JSON object found in AI response');
-        }
-        
-        jsonContent = jsonContent.substring(jsonStart, jsonEnd + 1);
-        const parsed = JSON.parse(jsonContent);
-        
-        // Validate the response structure
-        if (!parsed.strategy || !parsed.confidence || !parsed.reasoning) {
-          throw new Error('AI response missing required fields');
-        }
+          return {
+            path: '',
+            content: '',
+            changes: '',
+            reasoning: ''
+          };
+        });
         
         return {
-          strategy: parsed.strategy,
-          resolvedFiles: parsed.resolvedFiles || [],
-          unresolved: parsed.unresolved || [],
-          reasoning: parsed.reasoning,
-          confidence: parsed.confidence,
-          warnings: parsed.warnings || []
+          strategy: validStrategy,
+          resolvedFiles,
+          unresolved: this.getStringArray(parsed, 'unresolved'),
+          reasoning: this.getString(parsed, 'reasoning'),
+          confidence: this.getNumber(parsed, 'confidence'),
+          warnings: this.getStringArray(parsed, 'warnings')
         };
         
       } catch (parseError) {
-        console.error('Failed to parse AI conflict resolution:', parseError);
-        console.log('Raw response:', response.content.substring(0, 1000));
+        console.error('Failed to parse AI conflict resolution:', parseError instanceof Error ? parseError.message : 'Unknown error');
+        console.log('Raw response sample:', response.content.substring(0, 500));
         return null;
       }
       

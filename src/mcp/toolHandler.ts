@@ -21,6 +21,31 @@ export class ToolHandler {
     // Each tool call will create its own GitClient with the provided repoPath
   }
 
+  /**
+   * Handle MCP tool calls with comprehensive validation and error handling
+   * 
+   * @param name - The name of the MCP tool to execute ('ship', 'status', 'info')
+   * @param args - Tool-specific arguments and parameters
+   * @param args.repoPath - Absolute path to git repository (required for ship/status)
+   * @param args.verbose - Enable detailed output for debugging
+   * @param args.dryRun - Preview operations without executing them
+   * @returns Promise resolving to formatted MCP tool result
+   * 
+   * @example
+   * ```typescript
+   * const result = await toolHandler.handleToolCall('ship', {
+   *   repoPath: '/absolute/path/to/repo',
+   *   dryRun: true,
+   *   verbose: true
+   * });
+   * 
+   * if (result.isError) {
+   *   console.error('Tool execution failed');
+   * } else {
+   *   console.log(result.content[0].text);
+   * }
+   * ```
+   */
   async handleToolCall(name: ToolName, args: Record<string, any>): Promise<ToolResult> {
     try {
       // Validate repoPath (optional for info tool)
@@ -553,10 +578,10 @@ export class ToolHandler {
       
       // 2. Check if target branch exists locally
       try {
-        await gitClient.executeGitCommand(`show-ref --verify --quiet refs/heads/${targetBranch}`);
+        await gitClient.executeSafeGitCommand('show-ref --verify --quiet', [`refs/heads/${targetBranch}`]);
       } catch {
         // Target branch doesn't exist locally, fetch it
-        await gitClient.executeGitCommand(`fetch origin ${targetBranch}:${targetBranch}`);
+        await gitClient.executeSafeGitCommand('fetch origin', [`${targetBranch}:${targetBranch}`]);
       }
 
       // 3. Perform a test merge to detect conflicts
@@ -564,16 +589,16 @@ export class ToolHandler {
       
       // Create a temporary test branch
       const testBranch = `gitplus-test-merge-${Date.now()}`;
-      await gitClient.executeGitCommand(`checkout -b ${testBranch} ${targetBranch}`);
+      await gitClient.executeSafeGitCommand('checkout -b', [testBranch, targetBranch]);
       
       try {
         // Attempt merge
-        await gitClient.executeGitCommand(`merge --no-commit --no-ff ${sourceBranch}`);
+        await gitClient.executeSafeGitCommand('merge --no-commit --no-ff', [sourceBranch]);
         
         // If we get here, merge is clean
         await gitClient.executeGitCommand('merge --abort'); // Clean up the test merge
-        await gitClient.executeGitCommand(`checkout ${originalBranch}`);
-        await gitClient.executeGitCommand(`branch -D ${testBranch}`);
+        await gitClient.executeSafeGitCommand('checkout', [originalBranch]);
+        await gitClient.executeSafeGitCommand('branch -D', [testBranch]);
         
         steps.push(`✅ Merge test passed - no conflicts detected`);
         return {
@@ -589,9 +614,9 @@ export class ToolHandler {
           const conflictFiles = await this.getConflictFiles(gitClient);
           
           // Clean up
-          await gitClient.executeGitCommand('merge --abort');
-          await gitClient.executeGitCommand(`checkout ${originalBranch}`);
-          await gitClient.executeGitCommand(`branch -D ${testBranch}`);
+          await gitClient.executeGitCommand('merge --abort');  
+          await gitClient.executeSafeGitCommand('checkout', [originalBranch]);
+          await gitClient.executeSafeGitCommand('branch -D', [testBranch]);
           
           return {
             isConflictFree: false,
@@ -607,8 +632,8 @@ export class ToolHandler {
         } else {
           // Different merge error, might be safe to proceed
           await gitClient.executeGitCommand('merge --abort').catch(() => {});
-          await gitClient.executeGitCommand(`checkout ${originalBranch}`).catch(() => {});
-          await gitClient.executeGitCommand(`branch -D ${testBranch}`).catch(() => {});
+          await gitClient.executeSafeGitCommand('checkout', [originalBranch]).catch(() => {});
+          await gitClient.executeSafeGitCommand('branch -D', [testBranch]).catch(() => {});
           
           return {
             isConflictFree: true,
@@ -840,7 +865,7 @@ export class ToolHandler {
       infoText += `## 💭 Pro Tips\n\n`;
       infoText += `- Always provide the **repoPath** parameter as an absolute path to your git repository\n`;
       infoText += `- Use **\`status\`** first to understand your repository state\n`;
-      infoText += `- Try **\`analyze\`** to get AI insights before making commits\n`;
+      infoText += `- Use **\`status\`** with verbose mode to get detailed repository information\n`;
       infoText += `- Use **\`dryRun: true\`** to preview operations before executing\n`;
       infoText += `- The **\`ship\`** tool is your best friend for complete workflows\n\n`;
 

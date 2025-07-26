@@ -1,8 +1,9 @@
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
-import { GitStatus, CommitInfo, Platform } from '../types';
+import { GitStatus, CommitInfo, Platform, ConflictSection, ConflictResolutionResult, ConflictData, ErrorInfo, GitCommandResult } from '../types';
 import { ProjectDetector, ProjectType } from '../utils/projectDetector';
 import { GitignoreManager } from '../utils/gitignoreManager';
+import type { ConflictResolution } from '../ai/service';
 
 const execAsync = promisify(exec);
 
@@ -21,7 +22,142 @@ export class GitClient {
   }
 
   /**
-   * Execute a git command and return the output
+   * Sanitize and validate git command arguments to prevent injection attacks
+   */
+  private sanitizeGitArgument(arg: string): string {
+    if (typeof arg !== 'string') {
+      throw new Error('Git argument must be a string');
+    }
+    
+    // Check for dangerous characters and command injection patterns
+    const dangerousPatterns = [
+      /[;&|`$(){}[\]<>]/,  // Shell metacharacters
+      /\.\./,              // Directory traversal
+      /^-/,                // Arguments starting with dash (could be git options)
+      /^\s*(rm|del|format|config)\s*$/i, // Dangerous git commands
+    ];
+    
+    for (const pattern of dangerousPatterns) {
+      if (pattern.test(arg)) {
+        throw new Error(`Invalid git argument contains dangerous characters: ${arg}`);
+      }
+    }
+    
+    // Validate length to prevent extremely long arguments
+    if (arg.length > 255) {
+      throw new Error('Git argument exceeds maximum length');
+    }
+    
+    return arg;
+  }
+
+  /**
+   * Build safe git command with properly escaped arguments
+   */
+  private buildSafeGitCommand(command: string, args: string[] = []): string {
+    // Validate base command
+    const allowedCommands = [
+      'add', 'branch', 'checkout', 'commit', 'diff', 'fetch', 'log', 'merge',
+      'pull', 'push', 'rebase', 'reset', 'status', 'stash', 'show-ref', 
+      'rev-parse', 'rev-list', 'cherry-pick', 'reflog', 'clean', 'count-objects',
+      'symbolic-ref', 'remote'
+    ];
+    
+    const baseCommand = command.split(' ')[0];
+    if (baseCommand && !allowedCommands.includes(baseCommand)) {
+      throw new Error(`Git command not allowed: ${baseCommand}`);
+    }
+    
+    // Sanitize and escape all arguments
+    const sanitizedArgs = args.map(arg => {
+      const sanitized = this.sanitizeGitArgument(arg);
+      // Escape arguments that might contain spaces or special characters
+      return sanitized.includes(' ') || sanitized.includes('"') ? `"${sanitized.replace(/["\\]/g, '\\$&')}"` : sanitized;
+    });
+    
+    return [command, ...sanitizedArgs].join(' ');
+  }
+
+  /**
+   * SECURITY: Execute git command using spawn for complete shell injection protection
+   */
+  private async executeGitCommandWithSpawn(
+    executable: string,
+    args: string[],
+    options: { cwd: string; timeout: number }
+  ): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(executable, args, {
+        cwd: options.cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: options.timeout
+      });
+
+      let stdout = '';
+      let stderr = '';
+      let timedOut = false;
+
+      const timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        child.kill('SIGTERM');
+        reject(new Error(`Git command timed out after ${options.timeout}ms`));
+      }, options.timeout);
+
+      child.stdout.on('data', (data: Buffer) => {
+        stdout += data.toString('utf8');
+      });
+
+      child.stderr.on('data', (data: Buffer) => {
+        stderr += data.toString('utf8');
+      });
+
+      child.on('close', (code: number | null) => {
+        clearTimeout(timeoutHandle);
+        
+        if (timedOut) return; // Already handled by timeout
+        
+        if (code !== 0 && !stdout) {
+          reject(new Error(`Git command failed (exit code ${code}): ${stderr || 'No error message'}`));
+          return;
+        }
+
+        // Some git commands output to stderr (like status with colors)
+        resolve(stdout || stderr || '');
+      });
+
+      child.on('error', (error: Error) => {
+        clearTimeout(timeoutHandle);
+        if (!timedOut) {
+          reject(error);
+        }
+      });
+    });
+  }
+
+  /**
+   * Public method to execute git commands with safe argument handling
+   * This method should be used when direct command construction is needed
+   */
+  async executeSafeGitCommand(command: string, args: string[] = []): Promise<string> {
+    const safeCommand = this.buildSafeGitCommand(command, args);
+    return this.executeGitCommand(safeCommand);
+  }
+
+  /**
+   * Execute a git command safely and return the output
+   * 
+   * @param command - The git command to execute (without 'git' prefix)
+   * @param options - Optional configuration for command execution
+   * @param options.cwd - Working directory for the command (defaults to repo directory)  
+   * @param options.timeout - Command timeout in milliseconds (defaults to 30s)
+   * @returns Promise resolving to command output
+   * @throws {Error} If git is not installed, command fails, or timeout occurs
+   * 
+   * @example
+   * ```typescript
+   * const output = await gitClient.executeGitCommand('status --porcelain');
+   * const commits = await gitClient.executeGitCommand('log --oneline -5');
+   * ```
    */
   async executeGitCommand(
     command: string,
@@ -30,46 +166,42 @@ export class GitClient {
     const { cwd = this.workingDirectory, timeout = 30000 } = options;
     
     try {
-      const { stdout, stderr } = await execAsync(`git ${command}`, {
-        cwd,
-        timeout,
-        encoding: 'utf8',
-      });
-      
-      // Some git commands output to stderr (like status with colors)
-      return stdout || stderr || '';
-    } catch (error: any) {
+      // SECURITY FIX: Use spawn with proper argument separation instead of shell interpolation
+      const args = command.trim().split(/\s+/);
+      const result = await this.executeGitCommandWithSpawn('git', args, { cwd, timeout });
+      return result;
+    } catch (error: unknown) {
       // Handle git command errors
-      if (error.code === 'ENOENT') {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
         throw new Error('Git is not installed or not found in PATH');
       }
       
       // Handle specific git warnings that shouldn't fail operations
-      if (error.stderr && typeof error.stderr === 'string') {
+      if (error && typeof error === 'object' && 'stderr' in error && typeof error.stderr === 'string') {
         const stderr = error.stderr.toLowerCase();
         
         // Common git warnings that we can ignore or handle gracefully
         if (stderr.includes('no upstream branch') || 
             stderr.includes('set-upstream')) {
           // Return the stderr as output for upstream warnings
-          return error.stderr;
+          return (error as any).stderr;
         }
         
         if (stderr.includes('nothing to commit') || 
             stderr.includes('working tree clean')) {
           // Handle clean working tree
-          return error.stdout || error.stderr;
+          return (error as any).stdout || (error as any).stderr;
         }
         
         if (stderr.includes('already exists') && command.includes('branch')) {
           // Branch already exists
-          throw new Error(`Branch already exists: ${error.stderr}`);
+          throw new Error(`Branch already exists: ${(error as any).stderr}`);
         }
       }
       
-      if (error.code === 128) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 128) {
         // Git command failed - provide more context
-        const gitError = error.stderr || error.message;
+        const gitError = (error as any).stderr || (error as any).message;
         throw new Error(`Git command failed: ${gitError}`);
       }
       
@@ -79,6 +211,15 @@ export class GitClient {
 
   /**
    * Check if the current directory is a git repository
+   * 
+   * @returns Promise resolving to true if directory contains a valid git repository
+   * 
+   * @example
+   * ```typescript
+   * if (await gitClient.isGitRepository()) {
+   *   console.log('This is a git repository');
+   * }
+   * ```
    */
   async isGitRepository(): Promise<boolean> {
     try {
@@ -90,7 +231,18 @@ export class GitClient {
   }
 
   /**
-   * Get the current git status
+   * Get comprehensive git repository status including staged, unstaged, and untracked files
+   * 
+   * @returns Promise resolving to complete git status information
+   * @throws {Error} If not in a git repository
+   * 
+   * @example
+   * ```typescript
+   * const status = await gitClient.getStatus();
+   * console.log(`Current branch: ${status.branch}`);
+   * console.log(`Files staged: ${status.staged.length}`);
+   * console.log(`Repository is ${status.isDirty ? 'dirty' : 'clean'}`);
+   * ```
    */
   async getStatus(): Promise<GitStatus> {
     const isRepo = await this.isGitRepository();
@@ -433,12 +585,36 @@ export class GitClient {
   }
 
   /**
-   * Create a commit
+   * Create a git commit with the specified message
+   * 
+   * @param message - The commit message (must be non-empty, max 2048 characters)
+   * @param options - Optional commit configuration
+   * @param options.amend - Whether to amend the previous commit instead of creating new one
+   * @throws {Error} If message is invalid or commit fails
+   * 
+   * @example
+   * ```typescript
+   * await gitClient.commit('feat: add user authentication');
+   * await gitClient.commit('fix: resolve merge conflict', { amend: true });
+   * ```
    */
   async commit(message: string, options: { amend?: boolean } = {}): Promise<void> {
     const { amend = false } = options;
-    const command = amend ? `commit --amend -m "${message}"` : `commit -m "${message}"`;
-    await this.executeGitCommand(command);
+    
+    // Validate commit message
+    if (!message || typeof message !== 'string') {
+      throw new Error('Commit message must be a non-empty string');
+    }
+    if (message.length > 2048) {
+      throw new Error('Commit message exceeds maximum length (2048 characters)');
+    }
+    
+    // SECURITY: Use spawn directly with proper argument array
+    const args = amend ? ['commit', '--amend', '-m', message] : ['commit', '-m', message];
+    await this.executeGitCommandWithSpawn('git', args, {
+      cwd: this.workingDirectory,
+      timeout: 30000
+    });
   }
 
   /**
@@ -452,25 +628,41 @@ export class GitClient {
     const { branch, force = false, setUpstream = false } = options;
     
     let command = 'push';
-    if (force) command += ' --force';
-    if (setUpstream && branch) command += ` -u origin ${branch}`;
+    const args: string[] = [];
     
-    await this.executeGitCommand(command);
+    if (force) {
+      command += ' --force';
+    }
+    
+    if (setUpstream && branch) {
+      this.sanitizeGitArgument(branch); // Validate branch name
+      command += ' -u origin';
+      args.push(branch);
+    }
+    
+    const safeCommand = this.buildSafeGitCommand(command, args);
+    await this.executeGitCommand(safeCommand);
   }
 
   /**
    * Create a new branch
    */
   async createBranch(branchName: string, checkout: boolean = true): Promise<void> {
-    const command = checkout ? `checkout -b ${branchName}` : `branch ${branchName}`;
-    await this.executeGitCommand(command);
+    if (checkout) {
+      const safeCommand = this.buildSafeGitCommand('checkout -b', [branchName]);
+      await this.executeGitCommand(safeCommand);
+    } else {
+      const safeCommand = this.buildSafeGitCommand('branch', [branchName]);
+      await this.executeGitCommand(safeCommand);
+    }
   }
 
   /**
    * Switch to a branch
    */
   async checkout(branchName: string): Promise<void> {
-    await this.executeGitCommand(`checkout ${branchName}`);
+    const safeCommand = this.buildSafeGitCommand('checkout', [branchName]);
+    await this.executeGitCommand(safeCommand);
   }
 
   /**
@@ -495,7 +687,8 @@ export class GitClient {
    */
   async deleteBranch(branchName: string, force: boolean = false): Promise<void> {
     const flag = force ? '-D' : '-d';
-    await this.executeGitCommand(`branch ${flag} ${branchName}`);
+    const safeCommand = this.buildSafeGitCommand(`branch ${flag}`, [branchName]);
+    await this.executeGitCommand(safeCommand);
   }
 
   /**
@@ -518,7 +711,10 @@ export class GitClient {
       }
     } catch (error) {
       // Don't fail if fetch fails - might be offline or no remote
-      console.debug('Auto-fetch failed, continuing without fetch:', error);
+      // Log auto-fetch failure (only in development)
+      if (process.env['NODE_ENV'] === 'development' || process.env['GITPLUS_DEBUG'] === 'true') {
+        console.log('Auto-fetch failed, continuing without fetch:', error);
+      }
     }
   }
 
@@ -588,9 +784,10 @@ export class GitClient {
     try {
       const output = await this.executeGitCommand(command);
       return { success: true, output };
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Handle merge conflicts
-      if (error.message && error.message.toLowerCase().includes('conflict')) {
+      if (error && typeof error === 'object' && 'message' in error && 
+          typeof error.message === 'string' && error.message.toLowerCase().includes('conflict')) {
         const conflicts = await this.getConflictedFiles();
         return { 
           success: false, 
@@ -835,7 +1032,7 @@ export class GitClient {
   /**
    * Apply AI resolution to conflicted files
    */
-  private async applyAIResolution(resolution: any): Promise<{
+  private async applyAIResolution(resolution: ConflictResolution): Promise<{
     success: boolean;
     resolvedFiles: string[];
     remainingConflicts: string[];
@@ -859,7 +1056,9 @@ export class GitClient {
       }
       
       // Add any unresolved files to remaining conflicts
-      remainingConflicts.push(...resolution.unresolved);
+      if (resolution.unresolved) {
+        remainingConflicts.push(...resolution.unresolved);
+      }
       
       return {
         success: remainingConflicts.length === 0,
@@ -872,7 +1071,7 @@ export class GitClient {
       return {
         success: false,
         resolvedFiles,
-        remainingConflicts: resolution.resolvedFiles.map((f: any) => f.path).concat(resolution.unresolved)
+        remainingConflicts: resolution.resolvedFiles.map(f => f.path).concat(resolution.unresolved || [])
       };
     }
   }
@@ -880,7 +1079,7 @@ export class GitClient {
   /**
    * Extract detailed conflict data for AI analysis
    */
-  private async extractConflictData(conflictedFiles: string[]): Promise<any> {
+  private async extractConflictData(conflictedFiles: string[]): Promise<ConflictData> {
     const fs = await import('fs').then(m => m.promises);
     const path = await import('path');
     
@@ -916,10 +1115,10 @@ export class GitClient {
   /**
    * Parse git conflict markers in file content
    */
-  private parseConflictMarkers(content: string, filePath: string): any[] {
+  private parseConflictMarkers(content: string, filePath: string): ConflictSection[] {
     const lines = content.split('\n');
-    const sections = [];
-    let currentSection: any = null;
+    const sections: ConflictSection[] = [];
+    let currentSection: Partial<ConflictSection> | null = null;
     let lineNumber = 0;
     
     for (const line of lines) {
@@ -942,11 +1141,13 @@ export class GitClient {
         currentSection.endLine = lineNumber;
         
         // Add context around the conflict (5 lines before and after)
-        const contextStart = Math.max(0, currentSection.startLine - 6);
-        const contextEnd = Math.min(lines.length, currentSection.endLine + 5);
+        const startLine = currentSection.startLine || 1;
+        const endLine = currentSection.endLine || lineNumber;
+        const contextStart = Math.max(0, startLine - 6);
+        const contextEnd = Math.min(lines.length, endLine + 5);
         currentSection.context = lines.slice(contextStart, contextEnd).join('\n');
         
-        sections.push(currentSection);
+        sections.push(currentSection as ConflictSection);
         currentSection = null;
       } else if (currentSection) {
         // Add content to current section
@@ -1054,8 +1255,9 @@ export class GitClient {
     try {
       const output = await this.executeGitCommand(command);
       return { success: true, output };
-    } catch (error: any) {
-      if (error.message && error.message.toLowerCase().includes('conflict')) {
+    } catch (error: unknown) {
+      if (error && typeof error === 'object' && 'message' in error && 
+          typeof error.message === 'string' && error.message.toLowerCase().includes('conflict')) {
         const conflicts = await this.getConflictedFiles();
         return { 
           success: false, 
@@ -1190,8 +1392,9 @@ export class GitClient {
     try {
       const output = await this.executeGitCommand(command);
       return { success: true, output };
-    } catch (error: any) {
-      if (error.message && error.message.toLowerCase().includes('conflict')) {
+    } catch (error: unknown) {
+      if (error && typeof error === 'object' && 'message' in error && 
+          typeof error.message === 'string' && error.message.toLowerCase().includes('conflict')) {
         const conflicts = await this.getConflictedFiles();
         return { 
           success: false, 
@@ -1281,9 +1484,9 @@ export class GitClient {
     try {
       const [commitCount, branchCount, tagCount, lastCommit] = await Promise.all([
         this.executeGitCommand('rev-list --count HEAD').catch(() => '0'),
-        this.executeGitCommand('branch -a --format="%(refname:short)"').then(out => out.split('\n').filter(b => b.trim()).length).catch(() => 0),
+        this.executeGitCommand('branch -a --format=%(refname:short)').then(out => out.split('\n').filter(b => b.trim()).length).catch(() => 0),
         this.executeGitCommand('tag -l').then(out => out.split('\n').filter(t => t.trim()).length).catch(() => 0),
-        this.executeGitCommand('log -1 --format="%ad" --date=iso-strict').catch(() => '')
+        this.executeGitCommand('log -1 --format=%ad --date=iso-strict').catch(() => '')
       ]);
       
       const repoSize = await this.executeGitCommand('count-objects -vH').catch(() => '');
