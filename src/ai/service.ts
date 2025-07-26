@@ -4,6 +4,14 @@ import { ParsedClaudeResponse, ConflictData, ConflictResolutionResult, ResolvedC
 
 const execAsync = promisify(exec);
 
+// Constants for retry mechanism configuration
+const DEFAULT_TIMEOUT_MS = 120000; // 120 seconds
+const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_BASE_RETRY_DELAY_MS = 1000; // 1 second
+const MAX_RETRY_DELAY_MS = 30000; // 30 seconds maximum delay
+const RETRY_JITTER_FACTOR = 0.25; // ±25% random variation
+const EXPONENTIAL_BACKOFF_BASE = 2;
+
 export interface AIResponse {
   success: boolean;
   content: string;
@@ -64,11 +72,109 @@ export interface ResolvedFile {
 
 
 export class AIService {
-  private claudeCommand = process.env['GITPLUS_CLAUDE_COMMAND'] || 'claude';
-  private defaultModel = process.env['GITPLUS_MODEL'] || 'sonnet';
-  private timeout = parseInt(process.env['GITPLUS_TIMEOUT'] || '120000'); // 120 seconds
-  private maxRetries = parseInt(process.env['GITPLUS_MAX_RETRIES'] || '3');
-  private baseRetryDelay = parseInt(process.env['GITPLUS_BASE_RETRY_DELAY'] || '1000'); // 1 second
+  private claudeCommand: string;
+  private defaultModel: string;
+  private timeout: number;
+  private maxRetries: number;
+  private baseRetryDelay: number;
+
+  constructor() {
+    // Validate and set configuration from environment variables
+    this.claudeCommand = this.getValidatedClaudeCommand();
+    this.defaultModel = this.getValidatedModel();
+    this.timeout = this.getValidatedTimeout();
+    this.maxRetries = this.getValidatedMaxRetries();
+    this.baseRetryDelay = this.getValidatedBaseRetryDelay();
+  }
+
+  /**
+   * Validate and get Claude command from environment
+   */
+  private getValidatedClaudeCommand(): string {
+    const command = process.env['GITPLUS_CLAUDE_COMMAND'] || 'claude';
+    if (typeof command !== 'string' || command.trim().length === 0) {
+      throw new Error('GITPLUS_CLAUDE_COMMAND must be a non-empty string');
+    }
+    return command.trim();
+  }
+
+  /**
+   * Validate and get AI model from environment
+   */
+  private getValidatedModel(): string {
+    const model = process.env['GITPLUS_MODEL'] || 'sonnet';
+    const validModels = ['sonnet', 'haiku', 'opus'];
+    if (!validModels.includes(model)) {
+      throw new Error(`GITPLUS_MODEL must be one of: ${validModels.join(', ')}`);
+    }
+    return model;
+  }
+
+  /**
+   * Validate and get timeout from environment
+   */
+  private getValidatedTimeout(): number {
+    const timeoutStr = process.env['GITPLUS_TIMEOUT'] || DEFAULT_TIMEOUT_MS.toString();
+    const timeout = parseInt(timeoutStr, 10);
+    
+    if (isNaN(timeout)) {
+      throw new Error(`GITPLUS_TIMEOUT must be a valid number, got: ${timeoutStr}`);
+    }
+    
+    if (timeout < 1000) {
+      throw new Error('GITPLUS_TIMEOUT must be at least 1000ms (1 second)');
+    }
+    
+    if (timeout > 600000) {
+      throw new Error('GITPLUS_TIMEOUT must be at most 600000ms (10 minutes)');
+    }
+    
+    return timeout;
+  }
+
+  /**
+   * Validate and get max retries from environment
+   */
+  private getValidatedMaxRetries(): number {
+    const retriesStr = process.env['GITPLUS_MAX_RETRIES'] || DEFAULT_MAX_RETRIES.toString();
+    const retries = parseInt(retriesStr, 10);
+    
+    if (isNaN(retries)) {
+      throw new Error(`GITPLUS_MAX_RETRIES must be a valid number, got: ${retriesStr}`);
+    }
+    
+    if (retries < 0) {
+      throw new Error('GITPLUS_MAX_RETRIES must be at least 0');
+    }
+    
+    if (retries > 10) {
+      throw new Error('GITPLUS_MAX_RETRIES must be at most 10');
+    }
+    
+    return retries;
+  }
+
+  /**
+   * Validate and get base retry delay from environment
+   */
+  private getValidatedBaseRetryDelay(): number {
+    const delayStr = process.env['GITPLUS_BASE_RETRY_DELAY'] || DEFAULT_BASE_RETRY_DELAY_MS.toString();
+    const delay = parseInt(delayStr, 10);
+    
+    if (isNaN(delay)) {
+      throw new Error(`GITPLUS_BASE_RETRY_DELAY must be a valid number, got: ${delayStr}`);
+    }
+    
+    if (delay < 100) {
+      throw new Error('GITPLUS_BASE_RETRY_DELAY must be at least 100ms');
+    }
+    
+    if (delay > 10000) {
+      throw new Error('GITPLUS_BASE_RETRY_DELAY must be at most 10000ms (10 seconds)');
+    }
+    
+    return delay;
+  }
 
   /**
    * Execute Claude CLI command with retry logic and exponential backoff
@@ -92,29 +198,8 @@ export class AIService {
         return result;
       }
       
-      // Check if this is a retryable error
-      const isRetryable = this.isRetryableError(result.error || '');
-      
-      // If not retryable or we've exceeded max retries, return the error
-      if (!isRetryable || retryCount >= this.maxRetries) {
-        return result;
-      }
-      
-      // Calculate delay with exponential backoff and jitter
-      const delay = this.calculateRetryDelay(retryCount);
-      // Log retry attempt for debugging (only in development)
-      if (process.env['NODE_ENV'] === 'development' || process.env['GITPLUS_DEBUG'] === 'true') {
-        console.log(`AI service retry ${retryCount + 1}/${this.maxRetries} after ${delay}ms: ${result.error}`);
-      }
-      
-      // Wait for the calculated delay
-      await this.sleep(delay);
-      
-      // Retry with incremented count
-      return this.executeClaudeCommand(prompt, {
-        ...options,
-        retryCount: retryCount + 1
-      });
+      // Handle retry logic for failed attempts
+      return await this.handleRetryLogic(result, prompt, options);
       
     } catch (error: any) {
       return {
@@ -123,6 +208,61 @@ export class AIService {
         error: `Unexpected error in Claude CLI execution: ${error.message || 'Unknown error occurred'}`
       };
     }
+  }
+
+  /**
+   * Handle retry logic for failed Claude CLI attempts
+   */
+  private async handleRetryLogic(
+    failedResult: AIResponse,
+    prompt: string,
+    options: {
+      model?: string;
+      outputFormat?: 'text' | 'json';
+      maxTokens?: number;
+      retryCount?: number;
+    }
+  ): Promise<AIResponse> {
+    const { retryCount = 0 } = options;
+    
+    // Check if this is a retryable error
+    const isRetryable = this.isRetryableError(failedResult.error || '');
+    
+    // If not retryable or we've exceeded max retries, return the error
+    if (!isRetryable || retryCount >= this.maxRetries) {
+      return failedResult;
+    }
+    
+    // Execute retry with delay
+    await this.executeRetryDelay(retryCount, failedResult.error);
+    
+    // Retry with incremented count
+    return this.executeClaudeCommand(prompt, {
+      ...options,
+      retryCount: retryCount + 1
+    });
+  }
+
+  /**
+   * Execute retry delay with logging
+   */
+  private async executeRetryDelay(retryCount: number, error?: string): Promise<void> {
+    const delay = this.calculateRetryDelay(retryCount);
+    
+    // Log retry attempt for debugging (only in development)
+    if (this.shouldLogRetryAttempts()) {
+      console.log(`AI service retry ${retryCount + 1}/${this.maxRetries} after ${delay}ms: ${error}`);
+    }
+    
+    // Wait for the calculated delay
+    await this.sleep(delay);
+  }
+
+  /**
+   * Determine if retry attempts should be logged
+   */
+  private shouldLogRetryAttempts(): boolean {
+    return process.env['NODE_ENV'] === 'development' || process.env['GITPLUS_DEBUG'] === 'true';
   }
 
   /**
@@ -258,17 +398,14 @@ export class AIService {
    * Calculate retry delay with exponential backoff and jitter
    */
   private calculateRetryDelay(retryCount: number): number {
-    // Exponential backoff: baseDelay * 2^retryCount
-    const exponentialDelay = this.baseRetryDelay * Math.pow(2, retryCount);
+    // Exponential backoff: baseDelay * EXPONENTIAL_BACKOFF_BASE^retryCount
+    const exponentialDelay = this.baseRetryDelay * Math.pow(EXPONENTIAL_BACKOFF_BASE, retryCount);
     
-    // Add jitter to prevent thundering herd (±25% random variation)
-    const jitter = 0.25;
-    const randomFactor = 1 + (Math.random() * 2 - 1) * jitter;
+    // Add jitter to prevent thundering herd (±RETRY_JITTER_FACTOR random variation)
+    const randomFactor = 1 + (Math.random() * 2 - 1) * RETRY_JITTER_FACTOR;
     
-    // Cap at 30 seconds maximum
-    const maxDelay = 30000;
-    
-    return Math.min(exponentialDelay * randomFactor, maxDelay);
+    // Cap at MAX_RETRY_DELAY_MS maximum
+    return Math.min(exponentialDelay * randomFactor, MAX_RETRY_DELAY_MS);
   }
 
   /**
