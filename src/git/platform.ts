@@ -1,6 +1,6 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { writeFileSync, unlinkSync, mkdtempSync } from 'fs';
+import { promises as fs, mkdtempSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { Platform, PRRequest, PRResponse } from '../types';
@@ -26,24 +26,39 @@ export class PlatformManager {
   }
 
   /**
-   * Get platform capabilities
+   * Get platform capabilities with enhanced authentication validation
+   * 
+   * @returns Promise resolving to platform capabilities including PR creation, authentication status
+   * 
+   * @example
+   * ```typescript
+   * const capabilities = await platformManager.getCapabilities();
+   * if (capabilities.canCreatePR) {
+   *   console.log('Platform supports PR creation');
+   * }
+   * if (capabilities.requiresAuth) {
+   *   console.log('Authentication required for this platform');  
+   * }
+   * ```
    */
   async getCapabilities(): Promise<PlatformCapabilities> {
     switch (this.platform) {
       case Platform.GitHub:
         const ghAvailable = await this.isGitHubCLIAvailable();
+        const ghAuthenticated = ghAvailable ? await this.isGitHubAuthenticated() : false;
         return {
-          canCreatePR: ghAvailable,
-          canListPRs: ghAvailable,
-          canMergePR: ghAvailable,
+          canCreatePR: ghAvailable && ghAuthenticated,
+          canListPRs: ghAvailable && ghAuthenticated,
+          canMergePR: ghAvailable && ghAuthenticated,
           requiresAuth: true,
         };
       case Platform.GitLab:
         const glabAvailable = await this.isGitLabCLIAvailable();
+        const glabAuthenticated = glabAvailable ? await this.isGitLabAuthenticated() : false;
         return {
-          canCreatePR: glabAvailable,
-          canListPRs: glabAvailable,
-          canMergePR: glabAvailable,
+          canCreatePR: glabAvailable && glabAuthenticated,
+          canListPRs: glabAvailable && glabAuthenticated,
+          canMergePR: glabAvailable && glabAuthenticated,
           requiresAuth: true,
         };
       case Platform.LocalOnly:
@@ -55,6 +70,123 @@ export class PlatformManager {
           requiresAuth: false,
         };
     }
+  }
+
+  /**
+   * Validate GitHub CLI authentication status
+   */
+  private async isGitHubAuthenticated(): Promise<boolean> {
+    try {
+      // Use gh auth status to check authentication without exposing tokens
+      const { stdout, stderr } = await execAsync('gh auth status', {
+        timeout: 10000,
+        cwd: this.repositoryPath
+      });
+      
+      // gh auth status writes to stderr even on success
+      const output = (stdout + stderr).toLowerCase();
+      return output.includes('logged in') && !output.includes('not logged in') && !output.includes('error');
+    } catch (error: any) {
+      // If command fails, likely not authenticated
+      console.debug('GitHub authentication check failed:', error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Validate GitLab CLI authentication status  
+   */
+  private async isGitLabAuthenticated(): Promise<boolean> {
+    try {
+      // Use glab auth status to check authentication
+      const { stdout, stderr } = await execAsync('glab auth status', {
+        timeout: 10000,
+        cwd: this.repositoryPath
+      });
+      
+      const output = (stdout + stderr).toLowerCase();
+      return output.includes('active') && !output.includes('not authenticated') && !output.includes('error');
+    } catch (error: any) {
+      // If command fails, likely not authenticated
+      console.debug('GitLab authentication check failed:', error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Validate git remote URL and repository access
+   */
+  async validateRepositoryAccess(): Promise<{
+    isValid: boolean;
+    hasAccess: boolean;
+    errors: string[];
+    warnings: string[];
+  }> {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    let isValid = true;
+    let hasAccess = false;
+
+    try {
+      // Validate remote URL format
+      if (!this.remoteURL) {
+        errors.push('No remote URL configured');
+        isValid = false;
+      } else {
+        // Basic URL validation
+        try {
+          const parsedUrl = new URL(this.remoteURL.replace(/^git@([^:]+):/, 'https://$1/'));
+          if (!['https:', 'http:', 'ssh:'].includes(parsedUrl.protocol)) {
+            errors.push(`Invalid remote URL protocol: ${parsedUrl.protocol}`);
+            isValid = false;
+          }
+        } catch (urlError) {
+          errors.push(`Invalid remote URL format: ${this.remoteURL}`);
+          isValid = false;
+        }
+      }
+
+      // Test repository access
+      if (isValid) {
+        try {
+          await execAsync('git ls-remote --heads origin', {
+            timeout: 15000,
+            cwd: this.repositoryPath
+          });
+          hasAccess = true;
+        } catch (accessError: any) {
+          if (accessError.message.includes('Authentication failed') || 
+              accessError.message.includes('Permission denied')) {
+            errors.push('Authentication failed - invalid credentials or insufficient permissions');
+            warnings.push('Consider running platform CLI auth commands (gh auth login / glab auth login)');
+          } else if (accessError.message.includes('timeout')) {
+            warnings.push('Repository access timeout - network or server issues');
+            hasAccess = false; // Assume no access on timeout
+          } else {
+            warnings.push(`Repository access test failed: ${accessError.message}`);
+            hasAccess = false;
+          }
+        }
+      }
+
+      // Platform-specific authentication warnings
+      if (this.platform === Platform.GitHub && !await this.isGitHubAuthenticated()) {
+        warnings.push('GitHub CLI not authenticated - run: gh auth login');
+      } else if (this.platform === Platform.GitLab && !await this.isGitLabAuthenticated()) {
+        warnings.push('GitLab CLI not authenticated - run: glab auth login');
+      }
+
+    } catch (error: any) {
+      errors.push(`Repository validation failed: ${error.message}`);
+      isValid = false;
+    }
+
+    return {
+      isValid,
+      hasAccess,
+      errors,
+      warnings
+    };
   }
 
   /**
@@ -99,7 +231,7 @@ export class PlatformManager {
     const escapedTitle = this.escapeShellString(request.title);
     
     // Create temporary markdown file for the PR description
-    const tempFile = this.createTempMarkdownFile(request.body);
+    const tempFile = await this.createTempMarkdownFile(request.body);
     
     let command = `gh pr create --title ${escapedTitle} --body-file "${tempFile}"`;
     
@@ -137,7 +269,7 @@ export class PlatformManager {
       throw new Error(`GitHub PR creation failed: ${error.message}`);
     } finally {
       // Clean up temporary file
-      this.cleanupTempFile(tempFile);
+      await this.cleanupTempFile(tempFile);
     }
   }
 
@@ -149,7 +281,7 @@ export class PlatformManager {
     const escapedTitle = this.escapeShellString(request.title);
     
     // Create temporary markdown file for the MR description
-    const tempFile = this.createTempMarkdownFile(request.body);
+    const tempFile = await this.createTempMarkdownFile(request.body);
     
     let command = `glab mr create --title ${escapedTitle} --description-file "${tempFile}"`;
     
@@ -183,7 +315,7 @@ export class PlatformManager {
       throw new Error(`GitLab MR creation failed: ${error.message}`);
     } finally {
       // Clean up temporary file
-      this.cleanupTempFile(tempFile);
+      await this.cleanupTempFile(tempFile);
     }
   }
 
@@ -200,19 +332,19 @@ export class PlatformManager {
   /**
    * Create a temporary markdown file for PR/MR descriptions
    */
-  private createTempMarkdownFile(content: string): string {
+  private async createTempMarkdownFile(content: string): Promise<string> {
     const tempDir = mkdtempSync(join(tmpdir(), 'gitplus-'));
     const tempFile = join(tempDir, 'pr-description.md');
-    writeFileSync(tempFile, content, 'utf8');
+    await fs.writeFile(tempFile, content, 'utf8');
     return tempFile;
   }
 
   /**
    * Clean up temporary file
    */
-  private cleanupTempFile(filePath: string): void {
+  private async cleanupTempFile(filePath: string): Promise<void> {
     try {
-      unlinkSync(filePath);
+      await fs.unlink(filePath);
       // Also try to remove the parent directory if it's empty
       const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
       if (parentDir.includes('gitplus-')) {

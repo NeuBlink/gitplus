@@ -23,6 +23,9 @@ describe('PlatformManager', () => {
         }
         if (cmd.includes('gh --version')) {
           callback(null, { stdout: 'gh version 2.0.0', stderr: '' });
+        } else if (cmd.includes('gh auth status')) {
+          // Mock successful authentication
+          callback(null, { stdout: '', stderr: 'Logged in to github.com as user' });
         }
       });
 
@@ -30,7 +33,7 @@ describe('PlatformManager', () => {
       
       expect(capabilities.canCreatePR).toBe(true);
       expect(capabilities.requiresAuth).toBe(true);
-    });
+    }, 15000);
 
     it('should report no capabilities when GitHub CLI unavailable', async () => {
       const { exec } = require('child_process');
@@ -61,6 +64,9 @@ describe('PlatformManager', () => {
         }
         if (cmd.includes('glab --version')) {
           callback(null, { stdout: 'glab version 1.0.0', stderr: '' });
+        } else if (cmd.includes('glab auth status')) {
+          // Mock successful authentication
+          callback(null, { stdout: '', stderr: 'You are currently logged in as user. Your access token is active.' });
         }
       });
 
@@ -68,7 +74,7 @@ describe('PlatformManager', () => {
       
       expect(capabilities.canCreatePR).toBe(true);
       expect(capabilities.requiresAuth).toBe(true);
-    });
+    }, 15000);
   });
 
   describe('LocalOnly Platform', () => {

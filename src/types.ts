@@ -194,3 +194,90 @@ export interface GitLabConfig {
   removeSourceBranch: boolean;
   squashBeforeMerge: boolean;
 }
+
+// Enhanced type safety interfaces
+
+export interface ErrorInfo {
+  message: string;
+  code?: string;
+  stack?: string;
+  [key: string]: unknown;
+}
+
+export interface ConflictSection {
+  file: string;
+  startLine: number;
+  endLine: number;
+  oursContent: string;
+  theirsContent: string;
+  baseContent?: string;
+  context: string;
+  inTheirs?: boolean;
+}
+
+export interface ConflictResolutionResult {
+  success: boolean;
+  resolvedFiles: ResolvedConflictFile[];
+  remainingConflicts: string[];
+  reasoning?: string;
+  confidence?: number;
+  warnings?: string[];
+  unresolved?: string[];
+  strategy?: 'auto' | 'manual' | 'escalate';
+}
+
+export interface ResolvedConflictFile {
+  path: string;
+  content: string;
+  changes: string;
+  reasoning: string;
+}
+
+export interface ConflictData {
+  files: string[];
+  conflictSections: ConflictSection[];
+  branch: string;
+  baseBranch: string;
+  commits: Array<{
+    hash: string;
+    message: string;
+    author: string;
+  }>;
+  fileTypes: string[];
+}
+
+export interface ProjectAnalysisResult {
+  type: string;
+  confidence: number;
+  files: string[];
+  frameworks: string[];
+}
+
+export interface ProjectIndicators {
+  [key: string]: boolean | string | number;
+}
+
+export interface RepositoryValidationResult {
+  isValid: boolean;
+  hasAccess: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface GitCommandResult {
+  success: boolean;
+  output: string;
+  conflicts?: string[];
+}
+
+export interface ParsedClaudeResponse {
+  [key: string]: unknown;
+}
+
+export interface ToolCallArguments {
+  repoPath?: string;
+  verbose?: boolean;
+  dryRun?: boolean;
+  force?: boolean;
+  [key: string]: unknown;
+}
