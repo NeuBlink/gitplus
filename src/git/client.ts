@@ -656,7 +656,10 @@ export class GitClient {
       }
     } catch (error) {
       // Don't fail if fetch fails - might be offline or no remote
-      console.debug('Auto-fetch failed, continuing without fetch:', error);
+      // Log auto-fetch failure (only in development)
+      if (process.env['NODE_ENV'] === 'development' || process.env['GITPLUS_DEBUG'] === 'true') {
+        console.log('Auto-fetch failed, continuing without fetch:', error);
+      }
     }
   }
 

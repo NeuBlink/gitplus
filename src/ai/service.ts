@@ -102,7 +102,10 @@ export class AIService {
       
       // Calculate delay with exponential backoff and jitter
       const delay = this.calculateRetryDelay(retryCount);
-      console.debug(`AI service retry ${retryCount + 1}/${this.maxRetries} after ${delay}ms: ${result.error}`);
+      // Log retry attempt for debugging (only in development)
+      if (process.env['NODE_ENV'] === 'development' || process.env['GITPLUS_DEBUG'] === 'true') {
+        console.log(`AI service retry ${retryCount + 1}/${this.maxRetries} after ${delay}ms: ${result.error}`);
+      }
       
       // Wait for the calculated delay
       await this.sleep(delay);
@@ -140,6 +143,23 @@ export class AIService {
 
       let stdout = '';
       let stderr = '';
+      let isResolved = false;
+      let timeoutHandle: NodeJS.Timeout | null = null;
+
+      // Set up timeout handling for proper cleanup
+      if (this.timeout > 0) {
+        timeoutHandle = setTimeout(() => {
+          if (!isResolved) {
+            isResolved = true;
+            child.kill('SIGTERM');
+            resolve({
+              success: false,
+              content: '',
+              error: `Claude CLI timeout after ${this.timeout}ms`
+            });
+          }
+        }, this.timeout);
+      }
 
       child.stdout.on('data', (data: Buffer) => {
         stdout += data.toString();
@@ -150,6 +170,15 @@ export class AIService {
       });
 
       child.on('close', (code: number | null) => {
+        if (isResolved) return;
+        isResolved = true;
+        
+        // Clear timeout
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
+
         if (code !== 0 && !stdout) {
           resolve({
             success: false,
@@ -186,6 +215,15 @@ export class AIService {
       });
 
       child.on('error', (error: Error) => {
+        if (isResolved) return;
+        isResolved = true;
+        
+        // Clear timeout
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
+
         resolve({
           success: false,
           content: '',
@@ -330,39 +368,51 @@ export class AIService {
    * Parse Claude CLI JSON response with wrapper handling and cleanup
    */
   private parseClaudeJSONResponse(content: string): Record<string, unknown> {
-    if (!content || content.trim().length === 0) {
-      throw new Error('Empty AI response content');
+    if (!content || typeof content !== 'string' || content.trim().length === 0) {
+      throw new Error('Empty or invalid AI response content');
     }
 
     let actualContent = content.trim();
 
-    // Handle Claude CLI wrapper responses
+    // Handle Claude CLI wrapper responses with type safety
     try {
       const wrapper = JSON.parse(content);
       
-      // Handle different Claude CLI response types
-      if (wrapper.type === 'result') {
-        if (wrapper.subtype === 'success' && wrapper.result) {
-          actualContent = wrapper.result;
-        } else if (wrapper.subtype === 'error_during_execution') {
-          throw new Error(`Claude CLI execution error: ${wrapper.error || 'Unknown execution error'}`);
+      // Ensure wrapper is an object before accessing properties
+      if (this.isObject(wrapper)) {
+        // Handle different Claude CLI response types
+        if (this.getString(wrapper, 'type') === 'result') {
+          const subtype = this.getString(wrapper, 'subtype');
+          if (subtype === 'success' && wrapper['result']) {
+            // Ensure result is a string before using it
+            const result = wrapper['result'];
+            if (typeof result === 'string') {
+              actualContent = result;
+            }
+          } else if (subtype === 'error_during_execution') {
+            const errorMsg = this.getString(wrapper, 'error', 'Unknown execution error');
+            throw new Error(`Claude CLI execution error: ${errorMsg}`);
+          }
         }
       }
     } catch (wrapperError) {
       // If it's not a wrapper, continue with original content
       // This is expected behavior for direct JSON responses
+      if (wrapperError instanceof Error && wrapperError.message.includes('Claude CLI execution error')) {
+        throw wrapperError; // Re-throw execution errors
+      }
     }
 
     // Clean up the content - remove markdown code blocks if present
     let jsonContent = actualContent.trim();
     
-    // Remove markdown code blocks
+    // Remove markdown code blocks with better type safety
     const codeBlockMatch = jsonContent.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-    if (codeBlockMatch && codeBlockMatch[1]) {
+    if (codeBlockMatch && codeBlockMatch[1] && typeof codeBlockMatch[1] === 'string') {
       jsonContent = codeBlockMatch[1].trim();
     }
     
-    // Find JSON object boundaries
+    // Find JSON object boundaries with validation
     const jsonStart = jsonContent.indexOf('{');
     const jsonEnd = jsonContent.lastIndexOf('}');
     
@@ -372,10 +422,23 @@ export class AIService {
     
     jsonContent = jsonContent.substring(jsonStart, jsonEnd + 1);
     
+    // Validate JSON content is not empty after cleanup
+    if (!jsonContent || jsonContent.trim().length < 2) {
+      throw new Error('JSON content is empty after cleanup');
+    }
+    
     try {
-      return JSON.parse(jsonContent);
+      const parsed = JSON.parse(jsonContent);
+      
+      // Ensure the parsed result is an object
+      if (!this.isObject(parsed)) {
+        throw new Error('Parsed JSON is not an object');
+      }
+      
+      return parsed;
     } catch (parseError) {
-      throw new Error(`Failed to parse JSON response: ${parseError instanceof Error ? parseError.message : 'Unknown parse error'}`);
+      const errorMessage = parseError instanceof Error ? parseError.message : 'Unknown parse error';
+      throw new Error(`Failed to parse JSON response: ${errorMessage}`);
     }
   }
 

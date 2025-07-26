@@ -18,11 +18,35 @@ export class PlatformManager {
   private platform: Platform;
   private remoteURL: string;
   private repositoryPath: string;
+  private tempFiles: Set<string> = new Set();
 
   constructor(platform: Platform, remoteURL: string, repositoryPath: string) {
     this.platform = platform;
     this.remoteURL = remoteURL;
     this.repositoryPath = repositoryPath;
+    
+    // Register cleanup on process exit for better resource management
+    this.registerCleanupHandlers();
+  }
+
+  /**
+   * Register process cleanup handlers to ensure temporary files are cleaned up
+   */
+  private registerCleanupHandlers(): void {
+    const cleanup = () => {
+      // Clean up any remaining temporary files
+      for (const tempFile of this.tempFiles) {
+        this.cleanupTempFile(tempFile).catch(() => {
+          // Ignore cleanup errors during exit
+        });
+      }
+    };
+
+    // Register cleanup for various exit scenarios
+    process.on('exit', cleanup);
+    process.on('SIGINT', cleanup);
+    process.on('SIGTERM', cleanup);
+    process.on('uncaughtException', cleanup);
   }
 
   /**
@@ -88,7 +112,10 @@ export class PlatformManager {
       return output.includes('logged in') && !output.includes('not logged in') && !output.includes('error');
     } catch (error: any) {
       // If command fails, likely not authenticated
-      console.debug('GitHub authentication check failed:', error.message);
+      // Log authentication check failure (only in development)
+      if (process.env['NODE_ENV'] === 'development' || process.env['GITPLUS_DEBUG'] === 'true') {
+        console.log('GitHub authentication check failed:', error.message);
+      }
       return false;
     }
   }
@@ -108,7 +135,10 @@ export class PlatformManager {
       return output.includes('active') && !output.includes('not authenticated') && !output.includes('error');
     } catch (error: any) {
       // If command fails, likely not authenticated
-      console.debug('GitLab authentication check failed:', error.message);
+      // Log authentication check failure (only in development)
+      if (process.env['NODE_ENV'] === 'development' || process.env['GITPLUS_DEBUG'] === 'true') {
+        console.log('GitLab authentication check failed:', error.message);
+      }
       return false;
     }
   }
@@ -336,26 +366,46 @@ export class PlatformManager {
     const tempDir = mkdtempSync(join(tmpdir(), 'gitplus-'));
     const tempFile = join(tempDir, 'pr-description.md');
     await fs.writeFile(tempFile, content, 'utf8');
+    
+    // Track the temporary file for cleanup
+    this.tempFiles.add(tempFile);
+    
     return tempFile;
   }
 
   /**
-   * Clean up temporary file
+   * Clean up temporary file and directory with improved error handling
    */
   private async cleanupTempFile(filePath: string): Promise<void> {
+    if (!filePath) {
+      return; // Nothing to clean up
+    }
+
     try {
+      // Remove the temporary file
       await fs.unlink(filePath);
-      // Also try to remove the parent directory if it's empty
+      
+      // Remove from tracking set
+      this.tempFiles.delete(filePath);
+      
+      // Also try to remove the parent directory if it's a gitplus temp directory
       const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
-      if (parentDir.includes('gitplus-')) {
+      if (parentDir && parentDir.includes('gitplus-')) {
         try {
-          require('fs').rmdirSync(parentDir);
-        } catch {
-          // Ignore errors when cleaning up directory
+          // Use fs.rmdir with recursive option for better cleanup
+          await fs.rmdir(parentDir, { recursive: true });
+        } catch (dirError) {
+          // Directory might not be empty or might not exist - log only in debug mode
+          if (process.env['NODE_ENV'] === 'development' || process.env['GITPLUS_DEBUG'] === 'true') {
+            console.log('Failed to cleanup temp directory:', dirError);
+          }
         }
       }
     } catch (error) {
-      console.warn('Failed to cleanup temp file:', error);
+      // Log cleanup failures only in debug mode to avoid noise
+      if (process.env['NODE_ENV'] === 'development' || process.env['GITPLUS_DEBUG'] === 'true') {
+        console.log('Failed to cleanup temp file:', error);
+      }
     }
   }
 
