@@ -13,7 +13,50 @@ SYNTAX_ERROR=2
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly CLAUDE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Configuration
+# SECURITY: Enhanced environment variable validation
+validate_environment() {
+    local errors=()
+    
+    # Validate HOME directory
+    if [[ -z "${HOME:-}" ]]; then
+        errors+=("HOME environment variable is not set")
+    elif [[ ! -d "$HOME" ]]; then
+        errors+=("HOME directory does not exist: $HOME")
+    elif [[ ! -w "$HOME" ]]; then
+        errors+=("HOME directory is not writable: $HOME")
+    fi
+    
+    # Validate PATH
+    if [[ -z "${PATH:-}" ]]; then
+        errors+=("PATH environment variable is not set")
+    fi
+    
+    # Validate common tools availability
+    local required_tools=("git" "jq")
+    for tool in "${required_tools[@]}"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            errors+=("Required tool not found in PATH: $tool")
+        fi
+    done
+    
+    # Report validation errors
+    if [[ ${#errors[@]} -gt 0 ]]; then
+        echo "SECURITY: Environment validation failed:" >&2
+        for error in "${errors[@]}"; do
+            echo "  - $error" >&2
+        done
+        return 1
+    fi
+    
+    return 0
+}
+
+# Configuration with secure path construction
+if ! validate_environment; then
+    echo "FATAL: Environment validation failed, aborting" >&2
+    exit 1
+fi
+
 LOG_FILE="${HOME}/.claude/pre-ship-validation.log"
 MAX_LOG_SIZE=1048576  # 1MB
 readonly LOG_PERMISSIONS=600   # Secure log file permissions
@@ -339,6 +382,13 @@ main() {
     for file in "${files[@]}"; do
         if [[ -f "$file" ]]; then
             ((file_count++))
+            
+            # SECURITY: Limit number of files processed to prevent resource exhaustion
+            if [[ $file_count -gt 100 ]]; then
+                log_message "WARN" "File processing limit reached (100), stopping validation"
+                break
+            fi
+            
             log_message "INFO" "Validating file: $file"
             
             # Run syntax validation

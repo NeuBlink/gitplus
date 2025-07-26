@@ -299,6 +299,46 @@ process_git_files() {
     fi
 }
 
+# SECURITY: Enhanced environment variable validation
+validate_environment() {
+    local errors=()
+    
+    # Validate critical environment variables
+    if [[ -z "${HOME:-}" ]]; then
+        errors+=("HOME environment variable is not set")
+    elif [[ ! -d "$HOME" ]]; then
+        errors+=("HOME directory does not exist: $HOME")
+    elif [[ ! -w "$HOME" ]]; then
+        errors+=("HOME directory is not writable: $HOME")
+    fi
+    
+    # Validate PATH
+    if [[ -z "${PATH:-}" ]]; then
+        errors+=("PATH environment variable is not set")
+    fi
+    
+    # Validate SHELL if set
+    if [[ -n "${SHELL:-}" ]] && [[ ! -x "$SHELL" ]]; then
+        errors+=("SHELL environment variable points to non-executable file: $SHELL")
+    fi
+    
+    # Validate git availability
+    if ! command -v git >/dev/null 2>&1; then
+        errors+=("Git command not found in PATH")
+    fi
+    
+    # Report validation errors
+    if [[ ${#errors[@]} -gt 0 ]]; then
+        echo "SECURITY: Environment validation failed:" >&2
+        for error in "${errors[@]}"; do
+            echo "  - $error" >&2
+        done
+        return 1
+    fi
+    
+    return 0
+}
+
 # Security: Enhanced argument processing with validation
 process_file_arguments() {
     local file_count=0
@@ -326,9 +366,9 @@ main() {
     # Set up async execution marker
     log_suggestion "INFO: Auto-delegate hook started (async mode, PID: $$)"
     
-    # Security: Validate environment
-    if [[ -z "${HOME:-}" ]]; then
-        echo "ERROR: HOME environment variable not set" >&2
+    # SECURITY: Enhanced environment validation
+    if ! validate_environment; then
+        echo "FATAL: Environment validation failed, aborting" >&2
         exit 1
     fi
     

@@ -101,15 +101,12 @@ export class PlatformManager {
    */
   private async isGitHubAuthenticated(): Promise<boolean> {
     try {
-      // Use gh auth status to check authentication without exposing tokens
-      const { stdout, stderr } = await execAsync('gh auth status', {
-        timeout: 10000,
-        cwd: this.repositoryPath
-      });
+      // SECURITY FIX: Use spawn for consistency and security
+      const output = await this.executeCommandWithSpawn('gh', ['auth', 'status']);
       
-      // gh auth status writes to stderr even on success
-      const output = (stdout + stderr).toLowerCase();
-      return output.includes('logged in') && !output.includes('not logged in') && !output.includes('error');
+      // gh auth status writes output that we need to check
+      const lowerOutput = output.toLowerCase();
+      return lowerOutput.includes('logged in') && !lowerOutput.includes('not logged in') && !lowerOutput.includes('error');
     } catch (error: any) {
       // If command fails, likely not authenticated
       // Log authentication check failure (only in development)
@@ -125,14 +122,11 @@ export class PlatformManager {
    */
   private async isGitLabAuthenticated(): Promise<boolean> {
     try {
-      // Use glab auth status to check authentication
-      const { stdout, stderr } = await execAsync('glab auth status', {
-        timeout: 10000,
-        cwd: this.repositoryPath
-      });
+      // SECURITY FIX: Use spawn for consistency and security
+      const output = await this.executeCommandWithSpawn('glab', ['auth', 'status']);
       
-      const output = (stdout + stderr).toLowerCase();
-      return output.includes('active') && !output.includes('not authenticated') && !output.includes('error');
+      const lowerOutput = output.toLowerCase();
+      return lowerOutput.includes('active') && !lowerOutput.includes('not authenticated') && !lowerOutput.includes('error');
     } catch (error: any) {
       // If command fails, likely not authenticated
       // Log authentication check failure (only in development)
@@ -179,10 +173,8 @@ export class PlatformManager {
       // Test repository access
       if (isValid) {
         try {
-          await execAsync('git ls-remote --heads origin', {
-            timeout: 15000,
-            cwd: this.repositoryPath
-          });
+          // SECURITY FIX: Use spawn for consistency
+          await this.executeCommandWithSpawn('git', ['ls-remote', '--heads', 'origin']);
           hasAccess = true;
         } catch (accessError: any) {
           if (accessError.message.includes('Authentication failed') || 
@@ -257,32 +249,50 @@ export class PlatformManager {
    * Create GitHub Pull Request using gh CLI
    */
   private async createGitHubPR(request: PRRequest): Promise<PRResponse> {
-    // Properly escape shell metacharacters
-    const escapedTitle = this.escapeShellString(request.title);
+    // SECURITY FIX: Use spawn with proper argument separation instead of shell interpolation
+    const args = ['pr', 'create'];
+    
+    // Add title with proper escaping
+    args.push('--title', request.title);
     
     // Create temporary markdown file for the PR description
     const tempFile = await this.createTempMarkdownFile(request.body);
-    
-    let command = `gh pr create --title ${escapedTitle} --body-file "${tempFile}"`;
+    args.push('--body-file', tempFile);
     
     if (request.baseBranch) {
-      command += ` --base ${request.baseBranch}`;
+      // Validate base branch name to prevent injection
+      const validatedBaseBranch = this.validateBranchName(request.baseBranch);
+      if (validatedBaseBranch) {
+        args.push('--base', validatedBaseBranch);
+      }
     }
     
     if (request.draft) {
-      command += ' --draft';
+      args.push('--draft');
     }
     
     if (request.reviewers.length > 0) {
-      command += ` --reviewer ${request.reviewers.join(',')}`;
+      // Validate and sanitize reviewer names
+      const validReviewers = request.reviewers
+        .map(r => this.validateUsername(r))
+        .filter(r => r !== null) as string[];
+      if (validReviewers.length > 0) {
+        args.push('--reviewer', validReviewers.join(','));
+      }
     }
     
     if (request.labels.length > 0) {
-      command += ` --label ${request.labels.join(',')}`;
+      // Validate and sanitize label names
+      const validLabels = request.labels
+        .map(l => this.validateLabelName(l))
+        .filter(l => l !== null) as string[];
+      if (validLabels.length > 0) {
+        args.push('--label', validLabels.join(','));
+      }
     }
 
     try {
-      const { stdout } = await execAsync(command, { cwd: this.repositoryPath });
+      const stdout = await this.executeCommandWithSpawn('gh', args);
       const prURL = stdout.trim();
       
       // Extract PR number from URL
@@ -307,28 +317,40 @@ export class PlatformManager {
    * Create GitLab Merge Request using glab CLI
    */
   private async createGitLabMR(request: PRRequest): Promise<PRResponse> {
-    // Properly escape shell metacharacters
-    const escapedTitle = this.escapeShellString(request.title);
+    // SECURITY FIX: Use spawn with proper argument separation instead of shell interpolation
+    const args = ['mr', 'create'];
+    
+    // Add title with proper escaping
+    args.push('--title', request.title);
     
     // Create temporary markdown file for the MR description
     const tempFile = await this.createTempMarkdownFile(request.body);
-    
-    let command = `glab mr create --title ${escapedTitle} --description-file "${tempFile}"`;
+    args.push('--description-file', tempFile);
     
     if (request.baseBranch) {
-      command += ` --target-branch ${request.baseBranch}`;
+      // Validate base branch name to prevent injection
+      const validatedBaseBranch = this.validateBranchName(request.baseBranch);
+      if (validatedBaseBranch) {
+        args.push('--target-branch', validatedBaseBranch);
+      }
     }
     
     if (request.draft) {
-      command += ' --draft';
+      args.push('--draft');
     }
     
     if (request.labels.length > 0) {
-      command += ` --label ${request.labels.join(',')}`;
+      // Validate and sanitize label names
+      const validLabels = request.labels
+        .map(l => this.validateLabelName(l))
+        .filter(l => l !== null) as string[];
+      if (validLabels.length > 0) {
+        args.push('--label', validLabels.join(','));
+      }
     }
 
     try {
-      const { stdout } = await execAsync(command, { cwd: this.repositoryPath });
+      const stdout = await this.executeCommandWithSpawn('glab', args);
       const mrURL = stdout.trim();
       
       // Extract MR number from URL
@@ -414,8 +436,8 @@ export class PlatformManager {
    */
   private async isGitHubCLIAvailable(): Promise<boolean> {
     try {
-      await execAsync('gh --version', { cwd: this.repositoryPath });
-      // TODO: Check authentication status
+      // SECURITY FIX: Use spawn for consistency
+      await this.executeCommandWithSpawn('gh', ['--version']);
       return true;
     } catch {
       return false;
@@ -427,8 +449,8 @@ export class PlatformManager {
    */
   private async isGitLabCLIAvailable(): Promise<boolean> {
     try {
-      await execAsync('glab --version', { cwd: this.repositoryPath });
-      // TODO: Check authentication status
+      // SECURITY FIX: Use spawn for consistency
+      await this.executeCommandWithSpawn('glab', ['--version']);
       return true;
     } catch {
       return false;
@@ -490,5 +512,151 @@ export class PlatformManager {
       default:
         return { singular: 'PR', plural: 'PRs' };
     }
+  }
+
+  /**
+   * SECURITY: Execute command using spawn for complete shell injection protection
+   */
+  private async executeCommandWithSpawn(
+    executable: string,
+    args: string[]
+  ): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(executable, args, {
+        cwd: this.repositoryPath,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 30000
+      });
+
+      let stdout = '';
+      let stderr = '';
+      let timedOut = false;
+
+      const timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        child.kill('SIGTERM');
+        reject(new Error(`Command timed out after 30s: ${executable} ${args.join(' ')}`));
+      }, 30000);
+
+      child.stdout.on('data', (data: Buffer) => {
+        stdout += data.toString('utf8');
+      });
+
+      child.stderr.on('data', (data: Buffer) => {
+        stderr += data.toString('utf8');
+      });
+
+      child.on('close', (code: number | null) => {
+        clearTimeout(timeoutHandle);
+        
+        if (timedOut) return; // Already handled by timeout
+        
+        if (code !== 0) {
+          reject(new Error(`Command failed (exit code ${code}): ${stderr || 'No error message'}`));
+          return;
+        }
+
+        resolve(stdout);
+      });
+
+      child.on('error', (error: Error) => {
+        clearTimeout(timeoutHandle);
+        if (!timedOut) {
+          reject(error);
+        }
+      });
+    });
+  }
+
+  /**
+   * SECURITY: Validate branch name to prevent injection
+   */
+  private validateBranchName(branchName: string): string | null {
+    if (!branchName || typeof branchName !== 'string') {
+      return null;
+    }
+    
+    // Allow alphanumeric, hyphens, underscores, forward slashes, and dots
+    // but prevent dangerous patterns
+    const validPattern = /^[a-zA-Z0-9._\/-]+$/;
+    const dangerousPatterns = [
+      /\.\./,     // Path traversal
+      /^-/,       // Options starting with dash
+      /^\/+/,     // Leading slashes
+      /\/+$/,     // Trailing slashes
+      /;|&|\||`|\$|\(|\)|<|>|{|}|\[|\]/  // Shell metacharacters
+    ];
+    
+    if (!validPattern.test(branchName)) {
+      return null;
+    }
+    
+    for (const pattern of dangerousPatterns) {
+      if (pattern.test(branchName)) {
+        return null;
+      }
+    }
+    
+    // Limit length to prevent buffer overflow
+    if (branchName.length > 250) {
+      return null;
+    }
+    
+    return branchName;
+  }
+
+  /**
+   * SECURITY: Validate username to prevent injection
+   */
+  private validateUsername(username: string): string | null {
+    if (!username || typeof username !== 'string') {
+      return null;
+    }
+    
+    // GitHub/GitLab usernames: alphanumeric, hyphens, no leading/trailing hyphens
+    const validPattern = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
+    
+    if (!validPattern.test(username)) {
+      return null;
+    }
+    
+    // Limit length
+    if (username.length > 39) {  // GitHub username limit
+      return null;
+    }
+    
+    return username;
+  }
+
+  /**
+   * SECURITY: Validate label name to prevent injection
+   */
+  private validateLabelName(labelName: string): string | null {
+    if (!labelName || typeof labelName !== 'string') {
+      return null;
+    }
+    
+    // Labels can contain alphanumeric, spaces, hyphens, underscores
+    const validPattern = /^[a-zA-Z0-9\s._-]+$/;
+    const dangerousPatterns = [
+      /;|&|\||`|\$|\(|\)|<|>|{|}|\[|\]/  // Shell metacharacters
+    ];
+    
+    if (!validPattern.test(labelName)) {
+      return null;
+    }
+    
+    for (const pattern of dangerousPatterns) {
+      if (pattern.test(labelName)) {
+        return null;
+      }
+    }
+    
+    // Limit length
+    if (labelName.length > 50) {
+      return null;
+    }
+    
+    return labelName.trim();
   }
 }

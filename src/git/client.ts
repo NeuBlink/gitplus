@@ -79,6 +79,62 @@ export class GitClient {
   }
 
   /**
+   * SECURITY: Execute git command using spawn for complete shell injection protection
+   */
+  private async executeGitCommandWithSpawn(
+    executable: string,
+    args: string[],
+    options: { cwd: string; timeout: number }
+  ): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(executable, args, {
+        cwd: options.cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: options.timeout
+      });
+
+      let stdout = '';
+      let stderr = '';
+      let timedOut = false;
+
+      const timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        child.kill('SIGTERM');
+        reject(new Error(`Git command timed out after ${options.timeout}ms`));
+      }, options.timeout);
+
+      child.stdout.on('data', (data: Buffer) => {
+        stdout += data.toString('utf8');
+      });
+
+      child.stderr.on('data', (data: Buffer) => {
+        stderr += data.toString('utf8');
+      });
+
+      child.on('close', (code: number | null) => {
+        clearTimeout(timeoutHandle);
+        
+        if (timedOut) return; // Already handled by timeout
+        
+        if (code !== 0 && !stdout) {
+          reject(new Error(`Git command failed (exit code ${code}): ${stderr || 'No error message'}`));
+          return;
+        }
+
+        // Some git commands output to stderr (like status with colors)
+        resolve(stdout || stderr || '');
+      });
+
+      child.on('error', (error: Error) => {
+        clearTimeout(timeoutHandle);
+        if (!timedOut) {
+          reject(error);
+        }
+      });
+    });
+  }
+
+  /**
    * Public method to execute git commands with safe argument handling
    * This method should be used when direct command construction is needed
    */
@@ -110,14 +166,10 @@ export class GitClient {
     const { cwd = this.workingDirectory, timeout = 30000 } = options;
     
     try {
-      const { stdout, stderr } = await execAsync(`git ${command}`, {
-        cwd,
-        timeout,
-        encoding: 'utf8',
-      });
-      
-      // Some git commands output to stderr (like status with colors)
-      return stdout || stderr || '';
+      // SECURITY FIX: Use spawn with proper argument separation instead of shell interpolation
+      const args = command.trim().split(/\s+/);
+      const result = await this.executeGitCommandWithSpawn('git', args, { cwd, timeout });
+      return result;
     } catch (error: unknown) {
       // Handle git command errors
       if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
