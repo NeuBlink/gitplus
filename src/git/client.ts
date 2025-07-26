@@ -1481,9 +1481,9 @@ export class GitClient {
     try {
       const [commitCount, branchCount, tagCount, lastCommit] = await Promise.all([
         this.executeGitCommand('rev-list --count HEAD').catch(() => '0'),
-        this.executeGitCommand('branch -a --format="%(refname:short)"').then(out => out.split('\n').filter(b => b.trim()).length).catch(() => 0),
+        this.executeGitCommand('branch -a --format=%(refname:short)').then(out => out.split('\n').filter(b => b.trim()).length).catch(() => 0),
         this.executeGitCommand('tag -l').then(out => out.split('\n').filter(t => t.trim()).length).catch(() => 0),
-        this.executeGitCommand('log -1 --format="%ad" --date=iso-strict').catch(() => '')
+        this.executeGitCommand('log -1 --format=%ad --date=iso-strict').catch(() => '')
       ]);
       
       const repoSize = await this.executeGitCommand('count-objects -vH').catch(() => '');
