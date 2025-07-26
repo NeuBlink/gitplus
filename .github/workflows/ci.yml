@@ -51,6 +51,9 @@ jobs:
     - name: Run tests
       run: npm run test:coverage
       
+    - name: Run security tests
+      run: npm run test:security:coverage
+      
     - name: Upload coverage to Codecov
       if: matrix.node-version == '20.x'
       uses: codecov/codecov-action@ab904c41d6ece82784817410c45d8b8c02684457 # v3
@@ -86,6 +89,14 @@ jobs:
       
     - name: Check for known vulnerabilities
       run: npx audit-ci --config ./audit-ci.json || true
+      
+    - name: Run comprehensive security test suite
+      run: |
+        npm run build
+        npm run test:security --verbose
+        
+    - name: Security audit comprehensive
+      run: npm run security:audit
 
   compatibility:
     runs-on: ${{ matrix.os }}

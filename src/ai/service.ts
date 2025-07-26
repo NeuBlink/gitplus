@@ -70,6 +70,30 @@ export interface ResolvedFile {
   reasoning: string;
 }
 
+/**
+ * Security configuration for AI prompt protection
+ */
+interface SecurityConfig {
+  maxPromptLength: number;
+  maxDiffLength: number;
+  maxFileNameLength: number;
+  maxCommitMessageLength: number;
+  maxConflictSectionLength: number;
+  maxFileListLength: number;
+}
+
+/**
+ * Default security limits for prompt injection protection
+ */
+const DEFAULT_SECURITY_CONFIG: SecurityConfig = {
+  maxPromptLength: 50000,        // Total prompt length limit
+  maxDiffLength: 3000,           // Git diff content limit
+  maxFileNameLength: 255,        // Individual file name limit
+  maxCommitMessageLength: 500,   // Commit message limit
+  maxConflictSectionLength: 2000, // Individual conflict section limit
+  maxFileListLength: 50          // Maximum number of files to include
+};
+
 
 export class AIService {
   private claudeCommand: string;
@@ -77,6 +101,7 @@ export class AIService {
   private timeout: number;
   private maxRetries: number;
   private baseRetryDelay: number;
+  private securityConfig: SecurityConfig;
 
   constructor() {
     // Validate and set configuration from environment variables
@@ -85,6 +110,7 @@ export class AIService {
     this.timeout = this.getValidatedTimeout();
     this.maxRetries = this.getValidatedMaxRetries();
     this.baseRetryDelay = this.getValidatedBaseRetryDelay();
+    this.securityConfig = this.getSecurityConfig();
   }
 
   /**
@@ -179,6 +205,215 @@ export class AIService {
     }
     
     return delay;
+  }
+
+  /**
+   * Get security configuration from environment or use defaults
+   */
+  private getSecurityConfig(): SecurityConfig {
+    return {
+      maxPromptLength: this.getEnvNumber('GITPLUS_MAX_PROMPT_LENGTH', DEFAULT_SECURITY_CONFIG.maxPromptLength),
+      maxDiffLength: this.getEnvNumber('GITPLUS_MAX_DIFF_LENGTH', DEFAULT_SECURITY_CONFIG.maxDiffLength),
+      maxFileNameLength: this.getEnvNumber('GITPLUS_MAX_FILENAME_LENGTH', DEFAULT_SECURITY_CONFIG.maxFileNameLength),
+      maxCommitMessageLength: this.getEnvNumber('GITPLUS_MAX_COMMIT_MSG_LENGTH', DEFAULT_SECURITY_CONFIG.maxCommitMessageLength),
+      maxConflictSectionLength: this.getEnvNumber('GITPLUS_MAX_CONFLICT_LENGTH', DEFAULT_SECURITY_CONFIG.maxConflictSectionLength),
+      maxFileListLength: this.getEnvNumber('GITPLUS_MAX_FILE_LIST_LENGTH', DEFAULT_SECURITY_CONFIG.maxFileListLength)
+    };
+  }
+
+  /**
+   * Get environment variable as number with validation
+   */
+  private getEnvNumber(envVar: string, defaultValue: number): number {
+    const value = process.env[envVar];
+    if (!value) return defaultValue;
+    
+    const parsed = parseInt(value, 10);
+    if (isNaN(parsed) || parsed < 0) {
+      console.warn(`Invalid ${envVar}: ${value}, using default: ${defaultValue}`);
+      return defaultValue;
+    }
+    
+    return parsed;
+  }
+
+  /**
+   * Sanitize user input to prevent prompt injection attacks
+   */
+  private sanitizeInput(input: string, maxLength?: number): string {
+    if (!input || typeof input !== 'string') {
+      return '';
+    }
+
+    let sanitized = input
+      // Remove or escape dangerous characters that could break prompt structure
+      .replace(/`+/g, '`')                // Limit consecutive backticks to single backtick
+      .replace(/\$\{/g, '\\${')           // Escape template literals
+      .replace(/<\|/g, '&lt;|')           // Escape potential prompt tokens
+      .replace(/\|>/g, '|&gt;')           // Escape potential prompt tokens
+      .replace(/\[INST\]/gi, '[INST-ESCAPED]')  // Escape instruction tokens
+      .replace(/\[\/INST\]/gi, '[/INST-ESCAPED]') // Escape instruction tokens
+      .replace(/Human:/gi, 'Human-Escaped:')     // Escape role indicators
+      .replace(/Assistant:/gi, 'Assistant-Escaped:') // Escape role indicators
+      .replace(/\n\s*\n\s*\n/g, '\n\n')  // Limit consecutive newlines
+      .trim();
+
+    // Apply length limit if specified
+    if (maxLength && sanitized.length > maxLength) {
+      sanitized = sanitized.substring(0, maxLength - 20) + '... [truncated]';
+    }
+
+    return sanitized;
+  }
+
+  /**
+   * Sanitize file path to prevent directory traversal and other attacks
+   */
+  private sanitizeFilePath(path: string): string {
+    if (!path || typeof path !== 'string') {
+      return 'invalid-path';
+    }
+
+    return path
+      .replace(/\.\./g, '')           // Remove directory traversal
+      .replace(/[<>"|*?]/g, '_')      // Replace problematic characters
+      .replace(/\0/g, '')             // Remove null bytes
+      .substring(0, this.securityConfig.maxFileNameLength);
+  }
+
+  /**
+   * Sanitize git diff content with length limits and content filtering
+   */
+  private sanitizeDiff(diff: string): string {
+    if (!diff || typeof diff !== 'string') {
+      return '';
+    }
+
+    // First apply general sanitization
+    let sanitized = this.sanitizeInput(diff);
+
+    // Apply diff-specific sanitization
+    sanitized = sanitized
+      .replace(/password\s*[:=]\s*[^\s\n]+/gi, 'password: [REDACTED]')
+      .replace(/token\s*[:=]\s*[^\s\n]+/gi, 'token: [REDACTED]')
+      .replace(/key\s*[:=]\s*[^\s\n]+/gi, 'key: [REDACTED]')
+      .replace(/secret\s*[:=]\s*[^\s\n]+/gi, 'secret: [REDACTED]');
+
+    // Apply length limit
+    if (sanitized.length > this.securityConfig.maxDiffLength) {
+      sanitized = sanitized.substring(0, this.securityConfig.maxDiffLength - 50) + '\n... [diff truncated for security]';
+    }
+
+    return sanitized;
+  }
+
+  /**
+   * Sanitize commit message with length and content validation
+   */
+  private sanitizeCommitMessage(message: string): string {
+    if (!message || typeof message !== 'string') {
+      return '';
+    }
+
+    return this.sanitizeInput(message, this.securityConfig.maxCommitMessageLength);
+  }
+
+  /**
+   * Sanitize file list with count and individual file limits
+   */
+  private sanitizeFileList(files: string[]): string[] {
+    if (!Array.isArray(files)) {
+      return [];
+    }
+
+    return files
+      .slice(0, this.securityConfig.maxFileListLength)
+      .map(file => this.sanitizeFilePath(file))
+      .filter(file => file && file !== 'invalid-path');
+  }
+
+  /**
+   * Detect potential prompt injection patterns
+   */
+  private detectPromptInjection(input: string): boolean {
+    if (!input || typeof input !== 'string') {
+      return false;
+    }
+
+    const injectionPatterns = [
+      /ignore\s+(?:previous|all)\s+instructions/i,
+      /forget\s+(?:everything|all|instructions)/i,
+      /new\s+instructions?:/i,
+      /system\s*:\s*you\s+(?:are|must)/i,
+      /override\s+(?:security|safety|instructions)/i,
+      /\[INST\].*?\[\/INST\]/i,
+      /human\s*:\s*(?:ignore|forget|override)/i,
+      /assistant\s*:\s*(?:i\s+will|ok\s+i)/i,
+      /jailbreak|prompt\s+injection/i,
+      /execute\s+(?:code|command|script)/i,
+      /```.*?\bexec\b.*?```/i,
+      /\$\(.*?\)/,  // Command substitution
+      /`.*?`/       // Backtick commands (limited)
+    ];
+
+    return injectionPatterns.some(pattern => pattern.test(input));
+  }
+
+  /**
+   * Validate total prompt length to prevent overflow attacks
+   */
+  private validatePromptLength(prompt: string): boolean {
+    return prompt.length <= this.securityConfig.maxPromptLength;
+  }
+
+  /**
+   * Secure prompt builder with boundaries and injection detection
+   */
+  private buildSecurePrompt(template: string, data: Record<string, any>): string {
+    // First, sanitize all data inputs
+    const sanitizedData: Record<string, any> = {};
+    
+    for (const [key, value] of Object.entries(data)) {
+      if (typeof value === 'string') {
+        // Check for injection attempts
+        if (this.detectPromptInjection(value)) {
+          throw new Error(`Potential prompt injection detected in ${key}`);
+        }
+        sanitizedData[key] = this.sanitizeInput(value);
+      } else if (Array.isArray(value) && value.every(item => typeof item === 'string')) {
+        // Handle string arrays (like file lists)
+        sanitizedData[key] = this.sanitizeFileList(value);
+      } else {
+        sanitizedData[key] = value;
+      }
+    }
+
+    // Build prompt with clear delimiters
+    let prompt = `=== SYSTEM INSTRUCTIONS ===
+${template}
+
+=== USER DATA START ===
+`;
+
+    // Add data with clear boundaries
+    for (const [key, value] of Object.entries(sanitizedData)) {
+      if (Array.isArray(value)) {
+        prompt += `${key.toUpperCase()}:\n${value.map(item => `- ${item}`).join('\n')}\n\n`;
+      } else {
+        prompt += `${key.toUpperCase()}:\n${value}\n\n`;
+      }
+    }
+
+    prompt += `=== USER DATA END ===
+
+Please analyze the user data above and respond according to the system instructions.`;
+
+    // Validate total length
+    if (!this.validatePromptLength(prompt)) {
+      throw new Error(`Prompt length exceeds security limit of ${this.securityConfig.maxPromptLength} characters`);
+    }
+
+    return prompt;
   }
 
   /**
@@ -645,19 +880,22 @@ export class AIService {
     }>;
     projectType?: string;
   }): Promise<CommitSuggestion | null> {
-    const prompt = `Analyze these git changes and generate a STRICT Conventional Commits message.
+    try {
+      // Sanitize all inputs
+      const sanitizedContext = {
+        diff: this.sanitizeDiff(context.diff),
+        filesChanged: this.sanitizeFileList(context.filesChanged),
+        staged: this.sanitizeFileList(context.status.staged),
+        unstaged: this.sanitizeFileList(context.status.unstaged),
+        untracked: this.sanitizeFileList(context.status.untracked),
+        recentCommits: context.recentCommits?.slice(0, 3).map(c => ({
+          message: this.sanitizeCommitMessage(c.message),
+          hash: this.sanitizeInput(c.hash, 40)
+        })) || []
+      };
 
-FILES CHANGED:
-${context.filesChanged.map(f => `- ${f}`).join('\n')}
-
-STAGED FILES:
-${context.status.staged.map(f => `- ${f}`).join('\n')}
-
-GIT DIFF:
-${context.diff.substring(0, 2000)}${context.diff.length > 2000 ? '\n... (truncated for length)' : ''}
-
-${context.recentCommits ? `RECENT COMMITS:
-${context.recentCommits.slice(0, 3).map(c => `- ${c.message}`).join('\n')}` : ''}
+      // Build secure prompt template
+      const template = `Analyze the provided git changes and generate a STRICT Conventional Commits message.
 
 RESPOND WITH JSON ONLY:
 {
@@ -672,10 +910,6 @@ RESPOND WITH JSON ONLY:
 
 STRICT CONVENTIONAL COMMITS SPECIFICATION:
 Format: <type>[optional scope]: <description>
-
-[optional body]
-
-[optional footer(s)]
 
 REQUIRED TYPES (only these are allowed):
 - feat: A new feature (correlates with MINOR in semantic versioning)
@@ -713,53 +947,64 @@ EXAMPLES:
 
 ANALYZE THE CHANGES AND GENERATE THE MOST APPROPRIATE CONVENTIONAL COMMIT MESSAGE.`;
 
-    const response = await this.executeClaudeCommand(prompt, {
-      outputFormat: 'json',
-      model: 'sonnet'
-    });
+      const prompt = this.buildSecurePrompt(template, {
+        filesChanged: sanitizedContext.filesChanged,
+        stagedFiles: sanitizedContext.staged,
+        gitDiff: sanitizedContext.diff,
+        recentCommits: sanitizedContext.recentCommits.map(c => `${c.hash.substring(0, 7)}: ${c.message}`).join('\n')
+      });
 
-    if (!response.success) {
-      console.error('AI commit generation failed:', response.error);
-      return null;
-    }
+      const response = await this.executeClaudeCommand(prompt, {
+        outputFormat: 'json',
+        model: 'sonnet'
+      });
 
-    if (!response.content || response.content.trim().length === 0) {
-      console.error('AI commit generation returned empty response');
-      return null;
-    }
-
-    try {
-      const parsed = this.parseClaudeJSONResponse(response.content);
-      
-      // Validate required fields
-      this.validateRequiredFields(parsed, ['type', 'message'], 'commit message generation');
-      
-      // Handle breaking changes in message format
-      let message = this.getString(parsed, 'message');
-      const breaking = this.getBoolean(parsed, 'breaking');
-      const type = this.getString(parsed, 'type');
-      const scope = this.getString(parsed, 'scope');
-      
-      if (breaking && type && scope) {
-        // Add ! for breaking changes: type(scope)!: description
-        message = message.replace(/^(\w+)(\([^)]+\))(:)/, '$1$2!$3');
-      } else if (breaking && type) {
-        // Add ! for breaking changes: type!: description
-        message = message.replace(/^(\w+)(:)/, '$1!$2');
+      if (!response.success) {
+        console.error('AI commit generation failed:', response.error);
+        return null;
       }
-      
-      return {
-        message,
-        type: type || 'chore',
-        scope: scope || undefined,
-        description: this.getString(parsed, 'description'),
-        breaking,
-        body: this.getString(parsed, 'body') || undefined,
-        footer: this.getString(parsed, 'footer') || undefined
-      };
-    } catch (error) {
-      console.error('Failed to parse AI response:', error instanceof Error ? error.message : 'Unknown error');
-      console.error('Raw content sample:', response.content.substring(0, 500));
+
+      if (!response.content || response.content.trim().length === 0) {
+        console.error('AI commit generation returned empty response');
+        return null;
+      }
+
+      try {
+        const parsed = this.parseClaudeJSONResponse(response.content);
+        
+        // Validate required fields
+        this.validateRequiredFields(parsed, ['type', 'message'], 'commit message generation');
+        
+        // Handle breaking changes in message format
+        let message = this.getString(parsed, 'message');
+        const breaking = this.getBoolean(parsed, 'breaking');
+        const type = this.getString(parsed, 'type');
+        const scope = this.getString(parsed, 'scope');
+        
+        if (breaking && type && scope) {
+          // Add ! for breaking changes: type(scope)!: description
+          message = message.replace(/^(\w+)(\([^)]+\))(:)/, '$1$2!$3');
+        } else if (breaking && type) {
+          // Add ! for breaking changes: type!: description
+          message = message.replace(/^(\w+)(:)/, '$1!$2');
+        }
+        
+        return {
+          message,
+          type: type || 'chore',
+          scope: scope || undefined,
+          description: this.getString(parsed, 'description'),
+          breaking,
+          body: this.getString(parsed, 'body') || undefined,
+          footer: this.getString(parsed, 'footer') || undefined
+        };
+      } catch (error) {
+        console.error('Failed to parse AI response:', error instanceof Error ? error.message : 'Unknown error');
+        console.error('Raw content sample:', response.content.substring(0, 500));
+        return null;
+      }
+    } catch (securityError) {
+      console.error('Security error in commit message generation:', securityError instanceof Error ? securityError.message : 'Unknown security error');
       return null;
     }
   }
@@ -773,12 +1018,16 @@ ANALYZE THE CHANGES AND GENERATE THE MOST APPROPRIATE CONVENTIONAL COMMIT MESSAG
     changeType: string;
     description?: string;
   }): Promise<BranchSuggestion | null> {
-    const prompt = `Generate a git branch name for these changes:
+    try {
+      // Sanitize all inputs
+      const sanitizedContext = {
+        commitMessage: context.commitMessage ? this.sanitizeCommitMessage(context.commitMessage) : '',
+        filesChanged: this.sanitizeFileList(context.filesChanged).slice(0, 10),
+        changeType: this.sanitizeInput(context.changeType, 50),
+        description: context.description ? this.sanitizeInput(context.description, 200) : ''
+      };
 
-CHANGE TYPE: ${context.changeType}
-FILES CHANGED: ${context.filesChanged.slice(0, 10).join(', ')}
-${context.commitMessage ? `COMMIT MESSAGE: ${context.commitMessage}` : ''}
-${context.description ? `DESCRIPTION: ${context.description}` : ''}
+      const template = `Generate a git branch name for the provided changes.
 
 Please respond with a JSON object:
 {
@@ -794,27 +1043,38 @@ Rules:
 - Be descriptive but concise
 - Avoid special characters except hyphens`;
 
-    const response = await this.executeClaudeCommand(prompt, {
-      outputFormat: 'json',
-      model: 'sonnet'
-    });
+      const prompt = this.buildSecurePrompt(template, {
+        changeType: sanitizedContext.changeType,
+        filesChanged: sanitizedContext.filesChanged,
+        commitMessage: sanitizedContext.commitMessage,
+        description: sanitizedContext.description
+      });
 
-    if (!response.success) {
-      console.error('AI branch generation failed:', response.error);
-      return null;
-    }
+      const response = await this.executeClaudeCommand(prompt, {
+        outputFormat: 'json',
+        model: 'sonnet'
+      });
 
-    try {
-      const parsed = this.parseClaudeJSONResponse(response.content);
-      this.validateRequiredFields(parsed, ['name'], 'branch name generation');
-      
-      return {
-        name: this.getString(parsed, 'name'),
-        description: this.getString(parsed, 'description'),
-        alternative: this.getString(parsed, 'alternative') || undefined
-      };
-    } catch (error) {
-      console.error('Failed to parse AI response for branch name:', error instanceof Error ? error.message : 'Unknown error');
+      if (!response.success) {
+        console.error('AI branch generation failed:', response.error);
+        return null;
+      }
+
+      try {
+        const parsed = this.parseClaudeJSONResponse(response.content);
+        this.validateRequiredFields(parsed, ['name'], 'branch name generation');
+        
+        return {
+          name: this.getString(parsed, 'name'),
+          description: this.getString(parsed, 'description'),
+          alternative: this.getString(parsed, 'alternative') || undefined
+        };
+      } catch (error) {
+        console.error('Failed to parse AI response for branch name:', error instanceof Error ? error.message : 'Unknown error');
+        return null;
+      }
+    } catch (securityError) {
+      console.error('Security error in branch name generation:', securityError instanceof Error ? securityError.message : 'Unknown security error');
       return null;
     }
   }
@@ -833,20 +1093,21 @@ Rules:
     baseBranch: string;
     template?: string;
   }): Promise<PRSuggestion | null> {
-    const prompt = `Generate a pull request title and description for these changes:
+    try {
+      // Sanitize all inputs
+      const sanitizedContext = {
+        commits: context.commits.slice(0, 10).map(c => ({
+          message: this.sanitizeCommitMessage(c.message),
+          hash: this.sanitizeInput(c.hash, 40)
+        })),
+        filesChanged: this.sanitizeFileList(context.filesChanged),
+        diff: this.sanitizeDiff(context.diff),
+        branch: this.sanitizeInput(context.branch, 100),
+        baseBranch: this.sanitizeInput(context.baseBranch, 100),
+        template: context.template ? this.sanitizeInput(context.template, 1000) : ''
+      };
 
-BRANCH: ${context.branch} → ${context.baseBranch}
-FILES CHANGED (${context.filesChanged.length} files):
-${context.filesChanged.slice(0, 15).map(f => `- ${f}`).join('\n')}
-${context.filesChanged.length > 15 ? `... and ${context.filesChanged.length - 15} more files` : ''}
-
-COMMITS:
-${context.commits.map(c => `- ${c.message} (${c.hash.substring(0, 7)})`).join('\n')}
-
-DIFF SUMMARY:
-${context.diff.substring(0, 1500)}${context.diff.length > 1500 ? '\n... (truncated)' : ''}
-
-${context.template ? `TEMPLATE: ${context.template}` : ''}
+      const template = `Generate a pull request title and description for the provided changes.
 
 Please respond with a JSON object:
 {
@@ -867,28 +1128,41 @@ Requirements:
 - Suggest relevant labels based on change type
 - Don't suggest specific usernames for reviewers`;
 
-    const response = await this.executeClaudeCommand(prompt, {
-      outputFormat: 'json',
-      model: 'sonnet'
-    });
+      const prompt = this.buildSecurePrompt(template, {
+        branchInfo: `${sanitizedContext.branch} → ${sanitizedContext.baseBranch}`,
+        filesChanged: sanitizedContext.filesChanged.slice(0, 15),
+        additionalFiles: sanitizedContext.filesChanged.length > 15 ? `... and ${sanitizedContext.filesChanged.length - 15} more files` : '',
+        commits: sanitizedContext.commits.map(c => `${c.hash.substring(0, 7)}: ${c.message}`),
+        diffSummary: sanitizedContext.diff,
+        prTemplate: sanitizedContext.template
+      });
 
-    if (!response.success) {
-      console.error('AI PR generation failed:', response.error);
-      return null;
-    }
+      const response = await this.executeClaudeCommand(prompt, {
+        outputFormat: 'json',
+        model: 'sonnet'
+      });
 
-    try {
-      const parsed = this.parseClaudeJSONResponse(response.content);
-      this.validateRequiredFields(parsed, ['title', 'description'], 'PR description generation');
-      
-      return {
-        title: this.getString(parsed, 'title'),
-        description: this.getString(parsed, 'description'),
-        labels: this.getStringArray(parsed, 'labels'),
-        reviewers: this.getStringArray(parsed, 'reviewers')
-      };
-    } catch (error) {
-      console.error('Failed to parse AI response for PR description:', error instanceof Error ? error.message : 'Unknown error');
+      if (!response.success) {
+        console.error('AI PR generation failed:', response.error);
+        return null;
+      }
+
+      try {
+        const parsed = this.parseClaudeJSONResponse(response.content);
+        this.validateRequiredFields(parsed, ['title', 'description'], 'PR description generation');
+        
+        return {
+          title: this.getString(parsed, 'title'),
+          description: this.getString(parsed, 'description'),
+          labels: this.getStringArray(parsed, 'labels'),
+          reviewers: this.getStringArray(parsed, 'reviewers')
+        };
+      } catch (error) {
+        console.error('Failed to parse AI response for PR description:', error instanceof Error ? error.message : 'Unknown error');
+        return null;
+      }
+    } catch (securityError) {
+      console.error('Security error in PR description generation:', securityError instanceof Error ? securityError.message : 'Unknown security error');
       return null;
     }
   }
@@ -911,17 +1185,19 @@ Requirements:
     suggestions: string[];
     summary: string;
   } | null> {
-    const prompt = `Analyze these git changes and provide intelligent insights:
+    try {
+      // Sanitize all inputs
+      const sanitizedContext = {
+        diff: this.sanitizeDiff(context.diff),
+        filesChanged: this.sanitizeFileList(context.filesChanged),
+        commits: context.commits.slice(0, 5).map(c => ({
+          message: this.sanitizeCommitMessage(c.message),
+          hash: this.sanitizeInput(c.hash, 40)
+        })),
+        branch: this.sanitizeInput(context.branch, 100)
+      };
 
-BRANCH: ${context.branch}
-FILES CHANGED (${context.filesChanged.length} files):
-${context.filesChanged.map(f => `- ${f}`).join('\n')}
-
-RECENT COMMITS:
-${context.commits.slice(0, 5).map(c => `- ${c.message}`).join('\n')}
-
-DIFF:
-${context.diff.substring(0, 2000)}${context.diff.length > 2000 ? '\n... (truncated)' : ''}
+      const template = `Analyze the provided git changes and provide intelligent insights.
 
 Please respond with a JSON object:
 {
@@ -940,31 +1216,42 @@ Consider:
 - Test coverage
 - Documentation needs`;
 
-    const response = await this.executeClaudeCommand(prompt, {
-      outputFormat: 'json',
-      model: 'sonnet'
-    });
+      const prompt = this.buildSecurePrompt(template, {
+        branch: sanitizedContext.branch,
+        filesChanged: sanitizedContext.filesChanged,
+        recentCommits: sanitizedContext.commits.map(c => `${c.hash.substring(0, 7)}: ${c.message}`),
+        diff: sanitizedContext.diff
+      });
 
-    if (!response.success) {
-      console.error('AI analysis failed:', response.error);
-      return null;
-    }
+      const response = await this.executeClaudeCommand(prompt, {
+        outputFormat: 'json',
+        model: 'sonnet'
+      });
 
-    try {
-      const parsed = this.parseClaudeJSONResponse(response.content);
-      this.validateRequiredFields(parsed, ['changeType', 'impact', 'summary'], 'change analysis');
-      
-      const impact = this.getString(parsed, 'impact') as 'low' | 'medium' | 'high';
-      
-      return {
-        changeType: this.getString(parsed, 'changeType', 'chore'),
-        impact: ['low', 'medium', 'high'].includes(impact) ? impact : 'medium',
-        risks: this.getStringArray(parsed, 'risks'),
-        suggestions: this.getStringArray(parsed, 'suggestions'),
-        summary: this.getString(parsed, 'summary')
-      };
-    } catch (error) {
-      console.error('Failed to parse AI response for change analysis:', error instanceof Error ? error.message : 'Unknown error');
+      if (!response.success) {
+        console.error('AI analysis failed:', response.error);
+        return null;
+      }
+
+      try {
+        const parsed = this.parseClaudeJSONResponse(response.content);
+        this.validateRequiredFields(parsed, ['changeType', 'impact', 'summary'], 'change analysis');
+        
+        const impact = this.getString(parsed, 'impact') as 'low' | 'medium' | 'high';
+        
+        return {
+          changeType: this.getString(parsed, 'changeType', 'chore'),
+          impact: ['low', 'medium', 'high'].includes(impact) ? impact : 'medium',
+          risks: this.getStringArray(parsed, 'risks'),
+          suggestions: this.getStringArray(parsed, 'suggestions'),
+          summary: this.getString(parsed, 'summary')
+        };
+      } catch (error) {
+        console.error('Failed to parse AI response for change analysis:', error instanceof Error ? error.message : 'Unknown error');
+        return null;
+      }
+    } catch (securityError) {
+      console.error('Security error in change analysis:', securityError instanceof Error ? securityError.message : 'Unknown security error');
       return null;
     }
   }
@@ -988,22 +1275,23 @@ Consider:
     baseBranch?: string;
     projectType?: string;
   }): Promise<ComprehensiveAnalysis | null> {
-    const prompt = `Analyze these git changes and provide comprehensive information for a complete git workflow:
+    try {
+      // Sanitize all inputs
+      const sanitizedContext = {
+        diff: this.sanitizeDiff(context.diff),
+        filesChanged: this.sanitizeFileList(context.filesChanged),
+        staged: this.sanitizeFileList(context.status.staged),
+        unstaged: this.sanitizeFileList(context.status.unstaged),
+        untracked: this.sanitizeFileList(context.status.untracked),
+        recentCommits: context.recentCommits?.slice(0, 3).map(c => ({
+          message: this.sanitizeCommitMessage(c.message),
+          hash: this.sanitizeInput(c.hash, 40)
+        })) || [],
+        branch: this.sanitizeInput(context.branch, 100),
+        baseBranch: this.sanitizeInput(context.baseBranch || 'main', 100)
+      };
 
-FILES CHANGED (${context.filesChanged.length} files):
-${context.filesChanged.map(f => `- ${f}`).join('\n')}
-
-STAGED FILES:
-${context.status.staged.map(f => `- ${f}`).join('\n')}
-
-CURRENT BRANCH: ${context.branch}
-BASE BRANCH: ${context.baseBranch || 'main'}
-
-GIT DIFF:
-${context.diff.substring(0, 3000)}${context.diff.length > 3000 ? '\n... (truncated for length)' : ''}
-
-${context.recentCommits ? `RECENT COMMITS:
-${context.recentCommits.slice(0, 3).map(c => `- ${c.message}`).join('\n')}` : ''}
+      const template = `Analyze the provided git changes and provide comprehensive information for a complete git workflow.
 
 RESPOND WITH ONLY VALID JSON FOLLOWING STRICT CONVENTIONAL COMMITS:
 
@@ -1045,6 +1333,15 @@ CONVENTIONAL COMMITS SPECIFICATION COMPLIANCE:
 - Scope: optional, kebab-case if used
 
 CRITICAL: Return ONLY the JSON object above. No markdown formatting, code blocks, or explanatory text.`;
+
+      const prompt = this.buildSecurePrompt(template, {
+        filesChanged: sanitizedContext.filesChanged,
+        stagedFiles: sanitizedContext.staged,
+        currentBranch: sanitizedContext.branch,
+        baseBranch: sanitizedContext.baseBranch,
+        gitDiff: sanitizedContext.diff,
+        recentCommits: sanitizedContext.recentCommits.map(c => `${c.hash.substring(0, 7)}: ${c.message}`).join('\n')
+      });
 
     const response = await this.executeClaudeCommand(prompt, {
       outputFormat: 'json',
@@ -1125,6 +1422,10 @@ CRITICAL: Return ONLY the JSON object above. No markdown formatting, code blocks
       console.log('Raw response content:', response.content.substring(0, 1000));
       return null;
     }
+    } catch (securityError) {
+      console.error('Security error in comprehensive analysis:', securityError instanceof Error ? securityError.message : 'Unknown security error');
+      return null;
+    }
   }
 
   /**
@@ -1132,29 +1433,49 @@ CRITICAL: Return ONLY the JSON object above. No markdown formatting, code blocks
    */
   async analyzeAndResolveConflicts(conflictData: ConflictData): Promise<ConflictResolution | null> {
     try {
-      const prompt = `You are an expert software engineer with deep knowledge of git merge conflicts and code semantics. Analyze the following merge conflicts and provide intelligent resolution.
+      // Sanitize all conflict data inputs to prevent injection
+      const sanitizedConflictData = {
+        branch: this.sanitizeInput(conflictData.branch, 100),
+        baseBranch: this.sanitizeInput(conflictData.baseBranch, 100),
+        files: this.sanitizeFileList(conflictData.files).slice(0, 20), // Limit to 20 files
+        fileTypes: conflictData.fileTypes?.map(type => this.sanitizeInput(type, 50)).slice(0, 10) || [],
+        commits: conflictData.commits?.slice(0, 5).map(c => ({
+          hash: this.sanitizeInput(c.hash, 40),
+          message: this.sanitizeCommitMessage(c.message),
+          author: this.sanitizeInput(c.author, 100)
+        })) || [],
+        conflictSections: conflictData.conflictSections?.slice(0, 10).map(section => ({
+          file: this.sanitizeFilePath(section.file),
+          startLine: Math.max(0, Math.min(section.startLine || 0, 999999)),
+          endLine: Math.max(0, Math.min(section.endLine || 0, 999999)),
+          oursContent: this.sanitizeInput(section.oursContent || '', this.securityConfig.maxConflictSectionLength),
+          theirsContent: this.sanitizeInput(section.theirsContent || '', this.securityConfig.maxConflictSectionLength),
+          context: this.sanitizeInput(section.context || '', 500)
+        })) || []
+      };
 
-CONFLICT CONTEXT:
-- Branch: ${conflictData.branch} merging into ${conflictData.baseBranch}
-- Files: ${conflictData.files.join(', ')}
-- File types: ${conflictData.fileTypes.join(', ')}
-- Recent commits:
-${conflictData.commits.map(c => `  - ${c.hash.slice(0, 8)}: ${c.message} (${c.author})`).join('\n')}
+      // Check for prompt injection in any conflict data
+      const allContent = [
+        sanitizedConflictData.branch,
+        sanitizedConflictData.baseBranch,
+        ...sanitizedConflictData.files,
+        ...sanitizedConflictData.commits.map(c => `${c.message} ${c.author}`),
+        ...sanitizedConflictData.conflictSections.map(s => `${s.oursContent} ${s.theirsContent} ${s.context}`)
+      ].join(' ');
 
-CONFLICT SECTIONS:
-${conflictData.conflictSections.map(section => `
-File: ${section.file}
-Lines: ${section.startLine}-${section.endLine}
+      if (this.detectPromptInjection(allContent)) {
+        console.error('Potential prompt injection detected in conflict data');
+        return {
+          strategy: 'escalate',
+          resolvedFiles: [],
+          unresolved: sanitizedConflictData.files,
+          reasoning: 'Security check failed: Potential prompt injection detected in conflict data',
+          confidence: 0,
+          warnings: ['Manual resolution required due to security concerns']
+        };
+      }
 
-<<<<<<< HEAD (ours - ${conflictData.baseBranch})
-${section.oursContent}
-=======
-${section.theirsContent}
->>>>>>> ${conflictData.branch}
-
-Context around conflict:
-${section.context}
-`).join('\n---\n')}
+      const template = `You are an expert software engineer with deep knowledge of git merge conflicts and code semantics. Analyze the provided merge conflicts and provide intelligent resolution.
 
 RESOLUTION GUIDELINES:
 1. SEMANTIC ANALYSIS: Understand the purpose and functionality of each conflicting change
@@ -1193,6 +1514,22 @@ IMPORTANT:
 - For "escalate" strategy, explain what makes the conflict complex
 - Always prioritize code safety over convenience`;
 
+      // Build secure prompt with conflict data
+      const conflictSectionData = sanitizedConflictData.conflictSections.map(section => 
+        `File: ${section.file} (Lines: ${section.startLine}-${section.endLine})
+Our version: ${section.oursContent}
+Their version: ${section.theirsContent}
+Context: ${section.context}`
+      ).join('\n---\n');
+
+      const prompt = this.buildSecurePrompt(template, {
+        branchInfo: `${sanitizedConflictData.branch} → ${sanitizedConflictData.baseBranch}`,
+        conflictFiles: sanitizedConflictData.files,
+        fileTypes: sanitizedConflictData.fileTypes,
+        recentCommits: sanitizedConflictData.commits.map(c => `${c.hash.slice(0, 8)}: ${c.message} (${c.author})`),
+        conflictSections: conflictSectionData
+      });
+
       const response = await this.executeClaudeCommand(prompt, {
         maxTokens: 8192,
         outputFormat: 'json'
@@ -1212,15 +1549,15 @@ IMPORTANT:
         const strategy = this.getString(parsed, 'strategy') as 'auto' | 'manual' | 'escalate';
         const validStrategy = ['auto', 'manual', 'escalate'].includes(strategy) ? strategy : 'escalate';
         
-        // Parse resolved files array
+        // Parse resolved files array with sanitization
         const resolvedFilesArray = this.getArray(parsed, 'resolvedFiles');
         const resolvedFiles: ResolvedFile[] = resolvedFilesArray.map(item => {
           if (this.isObject(item)) {
             return {
-              path: this.getString(item, 'path'),
-              content: this.getString(item, 'content'),
-              changes: this.getString(item, 'changes'),
-              reasoning: this.getString(item, 'reasoning')
+              path: this.sanitizeFilePath(this.getString(item, 'path')),
+              content: this.sanitizeInput(this.getString(item, 'content'), 50000), // Limit content length
+              changes: this.sanitizeInput(this.getString(item, 'changes'), 1000),
+              reasoning: this.sanitizeInput(this.getString(item, 'reasoning'), 1000)
             };
           }
           return {
@@ -1234,10 +1571,10 @@ IMPORTANT:
         return {
           strategy: validStrategy,
           resolvedFiles,
-          unresolved: this.getStringArray(parsed, 'unresolved'),
-          reasoning: this.getString(parsed, 'reasoning'),
-          confidence: this.getNumber(parsed, 'confidence'),
-          warnings: this.getStringArray(parsed, 'warnings')
+          unresolved: this.getStringArray(parsed, 'unresolved').map(f => this.sanitizeFilePath(f)),
+          reasoning: this.sanitizeInput(this.getString(parsed, 'reasoning'), 2000),
+          confidence: Math.max(0, Math.min(100, this.getNumber(parsed, 'confidence'))),
+          warnings: this.getStringArray(parsed, 'warnings').map(w => this.sanitizeInput(w, 500))
         };
         
       } catch (parseError) {
@@ -1246,9 +1583,16 @@ IMPORTANT:
         return null;
       }
       
-    } catch (error) {
-      console.error('AI conflict resolution failed:', error);
-      return null;
+    } catch (securityError) {
+      console.error('Security error in conflict resolution:', securityError instanceof Error ? securityError.message : 'Unknown security error');
+      return {
+        strategy: 'escalate',
+        resolvedFiles: [],
+        unresolved: conflictData.files || [],
+        reasoning: 'Security check failed during conflict analysis',
+        confidence: 0,
+        warnings: ['Manual resolution required due to security concerns']
+      };
     }
   }
 

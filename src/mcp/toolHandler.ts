@@ -4,6 +4,7 @@ import { PlatformManager } from '../git/platform';
 import { ChangeAnalyzer } from '../git/analyzer';
 import { handlePRConflictResolution } from '../utils/conflictUtils';
 import { Platform } from '../types';
+import { validateGitPath, SecurityValidationResult } from '../utils/pathSecurity';
 
 // MCP Tool result type (matches the SDK's expected format with index signature)
 interface ToolResult {
@@ -62,30 +63,59 @@ export class ToolHandler {
         };
       }
 
-      // Check if path exists (skip for info tool without repoPath)
+      // SECURITY: Comprehensive path validation with traversal protection
       if (repoPath) {
         const fs = await import('fs').then(m => m.promises);
         const path = await import('path');
         
         try {
-          const stat = await fs.stat(repoPath);
+          // Phase 1: Security validation - prevent all forms of path traversal
+          const securityResult: SecurityValidationResult = await validateGitPath(repoPath);
+          
+          if (!securityResult.isValid) {
+            const violations = securityResult.violations.join(', ');
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `❌ **Security Error: Path Validation Failed**\n\n**Repository Path:** \`${repoPath}\`\n**Security Violations:** ${violations}\n\n**This path is blocked for security reasons to prevent:**\n• Directory traversal attacks\n• Access to system directories\n• Symlink-based path traversal\n• Repository boundary violations\n\n**Solution:** Use an absolute path within a valid git repository.`,
+                },
+              ],
+              isError: true,
+            };
+          }
+          
+          // Phase 2: Use the validated canonical path for all subsequent operations
+          const validatedPath = securityResult.canonicalPath;
+          
+          // Security warnings (non-blocking but logged)
+          if (securityResult.warnings.length > 0) {
+            console.warn(`[GitPlus Security] Path warnings for ${repoPath}:`, securityResult.warnings);
+          }
+          
+          // Phase 3: Check if the validated path exists and is a directory
+          const stat = await fs.stat(validatedPath);
           if (!stat.isDirectory()) {
             return {
               content: [
                 {
                   type: 'text',
-                  text: `❌ Error: Path is not a directory: ${repoPath}`,
-              },
-            ],
-            isError: true,
-          };
-        }
+                  text: `❌ Error: Path is not a directory: ${validatedPath}`,
+                },
+              ],
+              isError: true,
+            };
+          }
+          
+          // Phase 4: Update repoPath to use validated canonical path
+          args['repoPath'] = validatedPath;
+          
         } catch (error) {
           return {
             content: [
               {
                 type: 'text',
-                text: `❌ Error: Directory not found: ${repoPath}`,
+                text: `❌ **Security Error: Path Access Denied**\n\n**Repository Path:** \`${repoPath}\`\n**Error:** ${error instanceof Error ? error.message : 'Path validation failed'}\n\n**This error prevents potential security vulnerabilities including:**\n• Path traversal attacks\n• Unauthorized file system access\n• Symlink exploitation\n\n**Solution:** Verify the path exists and use an absolute path to a valid git repository.`,
               },
             ],
             isError: true,
@@ -95,9 +125,9 @@ export class ToolHandler {
 
       // Create GitClient for this specific repository (skip for info tool without repoPath)
       let gitClient: GitClient | undefined;
-      if (repoPath) {
+      if (args['repoPath']) { // Use validated path from args
         const path = await import('path');
-        gitClient = new GitClient(repoPath);
+        gitClient = new GitClient(args['repoPath']); // This is now the security-validated canonical path
         
         // Check if we're in a git repository, initialize if needed for MCP
         const isRepo = await gitClient.isGitRepository();
@@ -578,10 +608,10 @@ export class ToolHandler {
       
       // 2. Check if target branch exists locally
       try {
-        await gitClient.executeSafeGitCommand('show-ref --verify --quiet', [`refs/heads/${targetBranch}`]);
+        await gitClient.executeSecureGitCommand('show-ref --verify --quiet', [`refs/heads/${targetBranch}`]);
       } catch {
         // Target branch doesn't exist locally, fetch it
-        await gitClient.executeSafeGitCommand('fetch origin', [`${targetBranch}:${targetBranch}`]);
+        await gitClient.executeSecureGitCommand('fetch origin', [`${targetBranch}:${targetBranch}`]);
       }
 
       // 3. Perform a test merge to detect conflicts
@@ -589,16 +619,16 @@ export class ToolHandler {
       
       // Create a temporary test branch
       const testBranch = `gitplus-test-merge-${Date.now()}`;
-      await gitClient.executeSafeGitCommand('checkout -b', [testBranch, targetBranch]);
+      await gitClient.executeSecureGitCommand('checkout -b', [testBranch, targetBranch]);
       
       try {
         // Attempt merge
-        await gitClient.executeSafeGitCommand('merge --no-commit --no-ff', [sourceBranch]);
+        await gitClient.executeSecureGitCommand('merge --no-commit --no-ff', [sourceBranch]);
         
         // If we get here, merge is clean
         await gitClient.executeGitCommand('merge --abort'); // Clean up the test merge
-        await gitClient.executeSafeGitCommand('checkout', [originalBranch]);
-        await gitClient.executeSafeGitCommand('branch -D', [testBranch]);
+        await gitClient.executeSecureGitCommand('checkout', [originalBranch]);
+        await gitClient.executeSecureGitCommand('branch -D', [testBranch]);
         
         steps.push(`✅ Merge test passed - no conflicts detected`);
         return {
@@ -615,8 +645,8 @@ export class ToolHandler {
           
           // Clean up
           await gitClient.executeGitCommand('merge --abort');  
-          await gitClient.executeSafeGitCommand('checkout', [originalBranch]);
-          await gitClient.executeSafeGitCommand('branch -D', [testBranch]);
+          await gitClient.executeSecureGitCommand('checkout', [originalBranch]);
+          await gitClient.executeSecureGitCommand('branch -D', [testBranch]);
           
           return {
             isConflictFree: false,
@@ -632,8 +662,8 @@ export class ToolHandler {
         } else {
           // Different merge error, might be safe to proceed
           await gitClient.executeGitCommand('merge --abort').catch(() => {});
-          await gitClient.executeSafeGitCommand('checkout', [originalBranch]).catch(() => {});
-          await gitClient.executeSafeGitCommand('branch -D', [testBranch]).catch(() => {});
+          await gitClient.executeSecureGitCommand('checkout', [originalBranch]).catch(() => {});
+          await gitClient.executeSecureGitCommand('branch -D', [testBranch]).catch(() => {});
           
           return {
             isConflictFree: true,
