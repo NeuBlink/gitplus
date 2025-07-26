@@ -127,20 +127,20 @@ describe('Security Audit Tests', () => {
 
     beforeEach(() => {
       // Mock environment variables for testing
-      process.env.GITPLUS_CLAUDE_COMMAND = 'echo';
-      process.env.GITPLUS_MODEL = 'sonnet';
-      process.env.GITPLUS_TIMEOUT = '5000';
-      process.env.GITPLUS_MAX_RETRIES = '2';
+      process.env['GITPLUS_CLAUDE_COMMAND'] = 'echo';
+      process.env['GITPLUS_MODEL'] = 'sonnet';
+      process.env['GITPLUS_TIMEOUT'] = '5000';
+      process.env['GITPLUS_MAX_RETRIES'] = '2';
       
       aiService = new AIService();
     });
 
     afterEach(() => {
       // Clean up environment
-      delete process.env.GITPLUS_CLAUDE_COMMAND;
-      delete process.env.GITPLUS_MODEL;
-      delete process.env.GITPLUS_TIMEOUT;
-      delete process.env.GITPLUS_MAX_RETRIES;
+      delete process.env['GITPLUS_CLAUDE_COMMAND'];
+      delete process.env['GITPLUS_MODEL'];
+      delete process.env['GITPLUS_TIMEOUT'];
+      delete process.env['GITPLUS_MAX_RETRIES'];
     });
 
     it('should validate environment variables on construction', () => {

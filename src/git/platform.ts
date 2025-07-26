@@ -1,4 +1,4 @@
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import { promises as fs, mkdtempSync } from 'fs';
 import { join } from 'path';
