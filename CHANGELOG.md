@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.2.0](https://github.com/NeuBlink/gitplus/compare/gitplus-v1.1.0...gitplus-v1.2.0) (2025-07-26)
+
+
+### Features
+
+* **ai:** add retry logic with exponential backoff for reliability ([#36](https://github.com/NeuBlink/gitplus/issues/36)) ([a6d1108](https://github.com/NeuBlink/gitplus/commit/a6d1108cd6770e9f19c8b01d557d77cbfab02081))
+
+
+### Bug Fixes
+
+* **ci:** correct Release Please author validation format ([#41](https://github.com/NeuBlink/gitplus/issues/41)) ([8273a50](https://github.com/NeuBlink/gitplus/commit/8273a50b67ae4db7a92a1a2b806d9293d2640b1b))
+* **ci:** fix Release Please PR detection in merge-decision workflow ([#38](https://github.com/NeuBlink/gitplus/issues/38)) ([2e39d24](https://github.com/NeuBlink/gitplus/commit/2e39d24e6bfe225e6e1bf516035a1eda3fb09205))
+
 ## [1.1.0](https://github.com/NeuBlink/gitplus/compare/gitplus-v1.0.1...gitplus-v1.1.0) (2025-07-25)
 
 
