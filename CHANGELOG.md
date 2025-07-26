@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/NeuBlink/gitplus/compare/gitplus-v1.1.0...gitplus-v1.2.0) (2025-07-26)
+
+
+### Features
+
+* **ai:** add retry logic with exponential backoff for reliability ([#36](https://github.com/NeuBlink/gitplus/issues/36)) ([a6d1108](https://github.com/NeuBlink/gitplus/commit/a6d1108cd6770e9f19c8b01d557d77cbfab02081))
+
 ## [1.1.0](https://github.com/NeuBlink/gitplus/compare/gitplus-v1.0.1...gitplus-v1.1.0) (2025-07-25)
 
 
