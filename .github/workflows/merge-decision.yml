@@ -221,7 +221,7 @@ jobs:
           AUTHOR="$RAW_PR_AUTHOR"
           HEAD_BRANCH="$RAW_HEAD_BRANCH"
           IS_RELEASE_PLEASE="false"
-          if [[ "$AUTHOR" == "app/github-actions" ]] && [[ "$HEAD_BRANCH" =~ ^release-please--[a-zA-Z0-9._-]{1,50}$ ]]; then
+          if [[ "$AUTHOR" == "app/github-actions" ]] && [[ "$HEAD_BRANCH" =~ ^release-please--branches--main--components-- ]]; then
             IS_RELEASE_PLEASE="true"
             echo "Detected Release Please PR"
           fi
@@ -1082,7 +1082,7 @@ jobs:
           fi
           
           # Determine merge method
-          if [[ "$PR_AUTHOR" == "app/github-actions" ]] && [[ "$HEAD_BRANCH" =~ ^release-please--[a-zA-Z0-9._-]{1,50}$ ]]; then
+          if [[ "$PR_AUTHOR" == "app/github-actions" ]] && [[ "$HEAD_BRANCH" =~ ^release-please--branches--main--components-- ]]; then
             echo "🔄 Release Please PR detected"
             echo "merge_method=squash" >> $GITHUB_OUTPUT
             echo "is_release=true" >> $GITHUB_OUTPUT
