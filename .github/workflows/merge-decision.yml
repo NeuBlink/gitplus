@@ -221,17 +221,31 @@ jobs:
           AUTHOR="$RAW_PR_AUTHOR"
           HEAD_BRANCH="$RAW_HEAD_BRANCH"
           IS_RELEASE_PLEASE="false"
-          if [[ "$AUTHOR" == "app/github-actions" ]] && [[ "$HEAD_BRANCH" =~ ^release-please--[a-zA-Z0-9._-]{1,50}$ ]]; then
+          if [[ "$AUTHOR" == "app/github-actions" ]] && [[ "$HEAD_BRANCH" =~ ^release-please--branches--main--components-- ]]; then
             IS_RELEASE_PLEASE="true"
             echo "Detected Release Please PR"
           fi
           echo "IS_RELEASE_PLEASE=$IS_RELEASE_PLEASE" >> $GITHUB_OUTPUT
+          
+          # Get HEAD SHA from PR data if not available from event (workflow_dispatch case)
+          if [ -z "$HEAD_SHA" ] || [ "$HEAD_SHA" = "null" ]; then
+            echo "🔍 HEAD SHA not available from event, fetching from PR data..."
+            HEAD_SHA=$(echo "$PR_DATA" | jq -r '.commits[-1].oid // empty')
+            if [ -z "$HEAD_SHA" ] || [ "$HEAD_SHA" = "null" ]; then
+              # Fallback to direct API call
+              HEAD_SHA=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.head.sha')
+            fi
+            echo "📄 Retrieved HEAD SHA: $HEAD_SHA"
+          fi
           
           # Validate HEAD SHA format
           if ! [[ "$HEAD_SHA" =~ ^[a-f0-9]{40}$ ]] || [ ${#HEAD_SHA} -ne 40 ]; then
             echo "❌ ERROR: Invalid HEAD SHA format: $HEAD_SHA"
             exit 1
           fi
+          
+          # Export HEAD SHA for later steps
+          echo "HEAD_SHA=$HEAD_SHA" >> $GITHUB_OUTPUT
           
           # Get detailed CI check information
           echo "🔍 Gathering detailed CI check information..."
@@ -311,7 +325,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ needs.wait-for-checks.outputs.pr_number }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_SHA: ${{ steps.pr-context.outputs.HEAD_SHA || github.event.pull_request.head.sha }}
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -892,7 +906,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          COMMIT_SHA: ${{ steps.pr-context.outputs.HEAD_SHA || github.event.pull_request.head.sha || github.sha }}
           PR_NUMBER: ${{ steps.pr-context.outputs.PR_NUMBER }}
           IS_RELEASE_PLEASE: ${{ steps.pr-context.outputs.IS_RELEASE_PLEASE }}
           RECOMMENDED_ACTION: ${{ steps.parse-decision.outputs.RECOMMENDED_ACTION }}
@@ -921,7 +935,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          COMMIT_SHA: ${{ steps.pr-context.outputs.HEAD_SHA || github.event.pull_request.head.sha || github.sha }}
           REASON: ${{ steps.parse-decision.outputs.REASON }}
           RECOMMENDED_ACTION: ${{ steps.parse-decision.outputs.RECOMMENDED_ACTION }}
 
@@ -949,7 +963,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          COMMIT_SHA: ${{ steps.pr-context.outputs.HEAD_SHA || github.event.pull_request.head.sha || github.sha }}
           REASON: ${{ steps.parse-decision.outputs.REASON }}
           CRITICAL_ISSUES: ${{ steps.parse-decision.outputs.CRITICAL_ISSUES }}
 
@@ -1068,7 +1082,7 @@ jobs:
           fi
           
           # Determine merge method
-          if [[ "$PR_AUTHOR" == "app/github-actions" ]] && [[ "$HEAD_BRANCH" =~ ^release-please--[a-zA-Z0-9._-]{1,50}$ ]]; then
+          if [[ "$PR_AUTHOR" == "app/github-actions" ]] && [[ "$HEAD_BRANCH" =~ ^release-please--branches--main--components-- ]]; then
             echo "🔄 Release Please PR detected"
             echo "merge_method=squash" >> $GITHUB_OUTPUT
             echo "is_release=true" >> $GITHUB_OUTPUT
