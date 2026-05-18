@@ -266,8 +266,13 @@ export class AgentRuntime {
       return localGitPlusDir;
     }
 
-    const pointer = await this.readCurrentRunPointer(repoRoot);
-    return pointer?.ledger_root ?? localGitPlusDir;
+    const commonGitDir = await this.locateCommonGitDir(repoRoot);
+    const commonGitPlusDir = path.join(path.dirname(commonGitDir), '.gitplus');
+    if (await exists(path.join(commonGitPlusDir, 'runs'))) {
+      return commonGitPlusDir;
+    }
+
+    return localGitPlusDir;
   }
 
   private async readCurrentRunPointer(repoRoot?: string): Promise<CurrentRunPointer | undefined> {
@@ -284,7 +289,10 @@ export class AgentRuntime {
       throw new Error(`Invalid GitPlus current run pointer: ${pointerPath}`);
     }
 
-    return pointer;
+    return {
+      run_id: validateRunId(pointer.run_id),
+      ledger_root: path.normalize(pointer.ledger_root)
+    };
   }
 
   private async writeCurrentRunPointer(worktree: string, pointer: CurrentRunPointer): Promise<void> {
@@ -295,6 +303,19 @@ export class AgentRuntime {
 
   private getRunRecordPath(gitplusDir: string, runId: string): string {
     return path.join(gitplusDir, 'runs', `${runId}.json`);
+  }
+
+  private async locateCommonGitDir(repoRoot: string): Promise<string> {
+    try {
+      const result = await this.git(['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: repoRoot });
+      return path.normalize(result.stdout.trim());
+    } catch {
+      const result = await this.git(['rev-parse', '--git-common-dir'], { cwd: repoRoot });
+      const gitCommonDir = result.stdout.trim();
+      return path.normalize(path.isAbsolute(gitCommonDir)
+        ? gitCommonDir
+        : path.join(repoRoot, gitCommonDir));
+    }
   }
 
   private git(args: string[], options: { cwd: string }): Promise<GitResult> {
