@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.0](https://github.com/NeuBlink/gitplus/compare/gitplus-v1.2.1...gitplus-v1.3.0) (2026-05-18)
+
+
+### Features
+
+* **agent:** add agent-native GitPlus runtime ([ef350dc](https://github.com/NeuBlink/gitplus/commit/ef350dc2652e3dfa1eec5691ffdbc3c206128634))
+
+
+### Bug Fixes
+
+* **ci:** prevent release PR merge-decision limbo ([#49](https://github.com/NeuBlink/gitplus/issues/49)) ([8aeac15](https://github.com/NeuBlink/gitplus/commit/8aeac157d1616f92af8ba20dfb3e95773832f15d))
+* **ci:** publish release-please tags to npm ([#50](https://github.com/NeuBlink/gitplus/issues/50)) ([8c2287b](https://github.com/NeuBlink/gitplus/commit/8c2287b0655d466f814b9cb088da1fe965cbeb59))
+
 ## [1.2.1](https://github.com/NeuBlink/gitplus/compare/gitplus-v1.2.0...gitplus-v1.2.1) (2026-05-18)
 
 
