@@ -11,6 +11,83 @@ import { PlatformManager } from './git/platform';
 import { handlePRConflictResolution } from './utils/conflictUtils';
 import { Platform } from './types';
 
+type AgentInitTarget = 'codex' | 'claude' | 'gemini' | 'all';
+type CheckpointRisk = 'low' | 'medium' | 'high';
+
+type AgentRuntimeModule = {
+  AgentRuntime?: new (cwd?: string) => {
+    createRun?: (options: {
+      runId: string;
+      agent: string;
+      task: string;
+      branch: string;
+      baseBranch?: string;
+      claimedPaths?: string[];
+      risk?: string;
+      status?: string;
+    }) => Promise<unknown>;
+    listRuns?: () => Promise<unknown[]>;
+    getCurrentRun?: () => Promise<unknown | undefined>;
+    updateRun?: (runId: string, update: {
+      tests_run?: string[];
+      risk?: string;
+      status?: string;
+    }) => Promise<unknown>;
+    recordCheckpoint?: (runId: string, checkpoint: {
+      summary: string;
+      testsRun?: string[];
+      risk?: string;
+      status?: string;
+    }) => Promise<unknown>;
+    addPathClaims?: (runId: string, claimedPaths: string[]) => Promise<unknown>;
+  };
+  startRun?: (request: {
+    agent: string;
+    task: string;
+    baseBranch?: string;
+    branch?: string;
+    cwd: string;
+  }) => Promise<unknown> | unknown;
+  start?: (request: {
+    agent: string;
+    task: string;
+    baseBranch?: string;
+    branch?: string;
+    cwd: string;
+  }) => Promise<unknown> | unknown;
+  checkpoint?: (request: {
+    summary: string;
+    risk: CheckpointRisk;
+    tests: string[];
+    cwd: string;
+  }) => Promise<unknown> | unknown;
+  createCheckpoint?: (request: {
+    summary: string;
+    risk: CheckpointRisk;
+    tests: string[];
+    cwd: string;
+  }) => Promise<unknown> | unknown;
+  claim?: (request: { paths: string[]; cwd: string }) => Promise<unknown> | unknown;
+  claimPaths?: (request: { paths: string[]; cwd: string }) => Promise<unknown> | unknown;
+  getCurrentRun?: (request: { cwd: string }) => Promise<unknown> | unknown;
+  currentRun?: (request: { cwd: string }) => Promise<unknown> | unknown;
+};
+
+type AgentInstallKitModule = {
+  installAgentKit?: (request: {
+    repoPath: string;
+    agent: AgentInitTarget;
+  }) => Promise<unknown> | unknown;
+  initAgentRuntime?: (request: {
+    agent: AgentInitTarget;
+    cwd: string;
+  }) => Promise<unknown> | unknown;
+  init?: (request: {
+    agent: AgentInitTarget;
+    cwd: string;
+  }) => Promise<unknown> | unknown;
+};
+
 // Get package version
 function getPackageVersion(): string {
   try {
@@ -33,6 +110,167 @@ function output(message: string) {
 function handleError(error: any) {
   console.error(`❌ Error: ${error.message || error}`);
   process.exit(1);
+}
+
+function loadOptionalModule<T>(moduleCandidates: string[]): T | undefined {
+  for (const modulePath of moduleCandidates) {
+    try {
+      const loaded = require(modulePath);
+      return (loaded.default || loaded) as T;
+    } catch (error) {
+      const code = error instanceof Error && 'code' in error ? (error as NodeJS.ErrnoException).code : undefined;
+      const message = error instanceof Error ? error.message : '';
+      if (code !== 'MODULE_NOT_FOUND' || !message.includes(modulePath)) {
+        throw error;
+      }
+    }
+  }
+  return undefined;
+}
+
+function loadAgentRuntime(): AgentRuntimeModule | undefined {
+  return loadOptionalModule<AgentRuntimeModule>([
+    './agent/runtime',
+    './runtime/agent',
+    './runtime',
+  ]);
+}
+
+function loadAgentInstallKit(): AgentInstallKitModule | undefined {
+  return loadOptionalModule<AgentInstallKitModule>([
+    './agent/install-kit',
+    './agent/installKit',
+    './install-kit/agent',
+    './install-kit',
+  ]);
+}
+
+function parseInitAgent(value: string): AgentInitTarget {
+  if (value === 'codex' || value === 'claude' || value === 'gemini' || value === 'all') {
+    return value;
+  }
+  throw new Error('Agent must be one of: codex, claude, gemini, all');
+}
+
+function parseRisk(value: string): CheckpointRisk {
+  if (value === 'low' || value === 'medium' || value === 'high') {
+    return value;
+  }
+  throw new Error('Risk must be one of: low, medium, high');
+}
+
+function printAgentRuntimeMissing(moduleName: 'runtime' | 'install kit') {
+  output(`⚠️ GitPlus agent ${moduleName} module is not available in this workspace.`);
+  output('Integration assumption: this CLI will call the agent-native runtime once its modules are added under src/agent, src/runtime, or src/install-kit.');
+}
+
+function printResult(result: unknown) {
+  if (!result) {
+    return;
+  }
+
+  if (typeof result === 'string') {
+    output(result);
+    return;
+  }
+
+  if (typeof result === 'object') {
+    const record = result as Record<string, unknown>;
+    if (typeof record['message'] === 'string') {
+      output(record['message']);
+      return;
+    }
+    output(JSON.stringify(result, null, 2));
+  }
+}
+
+function createRunId(agent: string): string {
+  const safeAgent = agent.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'agent';
+  return `${safeAgent}-${Date.now().toString(36)}`;
+}
+
+function createBranchName(agent: string, task: string): string {
+  const safeAgent = agent.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'agent';
+  const safeTask = task.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'task';
+  return `gitplus/${safeAgent}/${safeTask}-${Date.now().toString(36)}`;
+}
+
+function getRunId(run: unknown): string | undefined {
+  if (!run || typeof run !== 'object') {
+    return undefined;
+  }
+
+  const record = run as Record<string, unknown>;
+  const value = record['run_id'] || record['runId'] || record['id'];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function getRunTests(run: unknown): string[] {
+  if (!run || typeof run !== 'object') {
+    return [];
+  }
+
+  const record = run as Record<string, unknown>;
+  const tests = record['tests_run'] || record['testsRun'] || record['tests'];
+  return Array.isArray(tests) ? tests.filter((test): test is string => typeof test === 'string') : [];
+}
+
+async function getLatestAgentRun(runtime: AgentRuntimeModule, cwd: string): Promise<unknown | undefined> {
+  const getCurrentRun = runtime.getCurrentRun || runtime.currentRun;
+  if (getCurrentRun) {
+    return getCurrentRun({ cwd });
+  }
+
+  if (!runtime.AgentRuntime) {
+    return undefined;
+  }
+
+  const runtimeInstance = new runtime.AgentRuntime(cwd);
+  if (runtimeInstance.getCurrentRun) {
+    return runtimeInstance.getCurrentRun();
+  }
+
+  if (!runtimeInstance.listRuns) {
+    return undefined;
+  }
+
+  const runs = await runtimeInstance.listRuns();
+  const active = runs.filter(run => {
+    if (!run || typeof run !== 'object') {
+      return false;
+    }
+    const status = (run as Record<string, unknown>)['status'];
+    return status === 'created' || status === 'running' || status === 'blocked';
+  });
+
+  const candidates = active.length > 0 ? active : runs;
+  return candidates[candidates.length - 1];
+}
+
+function formatCurrentRun(run: unknown): string[] {
+  if (!run || typeof run !== 'object') {
+    return [];
+  }
+
+  const record = run as Record<string, unknown>;
+  const lines = ['\nGitPlus Run:'];
+  const fields: Array<[string, string[]]> = [
+    ['ID', ['id', 'runId', 'run_id']],
+    ['Agent', ['agent', 'agentName']],
+    ['Task', ['task', 'summary']],
+    ['Branch', ['branch']],
+    ['Base', ['baseBranch', 'base', 'base_branch']],
+    ['Status', ['status', 'state']],
+  ];
+
+  for (const [label, keys] of fields) {
+    const value = keys.map(key => record[key]).find(field => field !== undefined && field !== null);
+    if (value !== undefined && value !== null) {
+      lines.push(`  - ${label}: ${String(value)}`);
+    }
+  }
+
+  return lines.length > 1 ? lines : [];
 }
 
 // Helper to ensure git repository
@@ -334,6 +572,192 @@ program
     }
   });
 
+// Agent init command
+program
+  .command('init')
+  .description('Initialize GitPlus agent-native runtime support')
+  .requiredOption('--agent <agent>', 'Agent runtime to initialize (codex, claude, gemini, all)', parseInitAgent)
+  .action(async (options) => {
+    try {
+      const gitClient = new GitClient();
+      await ensureGitRepository(gitClient);
+
+      const installKit = loadAgentInstallKit();
+      const initAgentRuntime = installKit?.initAgentRuntime || installKit?.init;
+      const installAgentKit = installKit?.installAgentKit;
+
+      if (!initAgentRuntime && !installAgentKit) {
+        printAgentRuntimeMissing('install kit');
+        return;
+      }
+
+      const cwd = gitClient.getWorkingDirectory();
+      const result = installAgentKit
+        ? await installAgentKit({ agent: options.agent, repoPath: cwd })
+        : await initAgentRuntime!({ agent: options.agent, cwd });
+
+      output(`✅ Initialized GitPlus agent runtime: ${options.agent}`);
+      printResult(result);
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+// Agent start command
+program
+  .command('start')
+  .description('Start an agent-native GitPlus run')
+  .requiredOption('--agent <name>', 'Agent runtime name')
+  .requiredOption('--task <task>', 'Task for the agent run')
+  .option('--base <branch>', 'Base branch for the agent run')
+  .option('--branch <branch>', 'Working branch for the agent run')
+  .action(async (options) => {
+    try {
+      const gitClient = new GitClient();
+      await ensureGitRepository(gitClient);
+
+      const runtime = loadAgentRuntime();
+      const startRun = runtime?.startRun || runtime?.start;
+      const AgentRuntime = runtime?.AgentRuntime;
+
+      if (!startRun && !AgentRuntime) {
+        printAgentRuntimeMissing('runtime');
+        return;
+      }
+
+      const cwd = gitClient.getWorkingDirectory();
+      const result = AgentRuntime
+        ? await new AgentRuntime(cwd).createRun!({
+            runId: createRunId(options.agent),
+            agent: options.agent,
+            task: options.task,
+            baseBranch: options.base,
+            branch: options.branch || createBranchName(options.agent, options.task),
+            status: 'running',
+          })
+        : await startRun!({
+            agent: options.agent,
+            task: options.task,
+            baseBranch: options.base,
+            branch: options.branch,
+            cwd,
+          });
+
+      output(`✅ Started GitPlus run for ${options.agent}`);
+      printResult(result);
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+// Agent checkpoint command
+program
+  .command('checkpoint')
+  .description('Record an agent-native GitPlus checkpoint')
+  .requiredOption('--summary <text>', 'Checkpoint summary')
+  .option('--risk <risk>', 'Checkpoint risk (low, medium, high)', parseRisk, 'low')
+  .option('--test <cmd...>', 'Validation command associated with this checkpoint')
+  .action(async (options) => {
+    try {
+      const gitClient = new GitClient();
+      await ensureGitRepository(gitClient);
+
+      const runtime = loadAgentRuntime();
+      const checkpoint = runtime?.checkpoint || runtime?.createCheckpoint;
+      const AgentRuntime = runtime?.AgentRuntime;
+
+      if (!checkpoint && !AgentRuntime) {
+        printAgentRuntimeMissing('runtime');
+        return;
+      }
+
+      const cwd = gitClient.getWorkingDirectory();
+      let result: unknown;
+      if (AgentRuntime) {
+        const runtimeInstance = new AgentRuntime(cwd);
+        const currentRun = await getLatestAgentRun(runtime, cwd);
+        const runId = getRunId(currentRun);
+        if (!runId) {
+          throw new Error('No current GitPlus run found. Start one with gitplus start first.');
+        }
+
+        if (runtimeInstance.recordCheckpoint) {
+          result = await runtimeInstance.recordCheckpoint(runId, {
+            summary: options.summary,
+            risk: options.risk,
+            status: 'running',
+            testsRun: options.test || [],
+          });
+        } else if (runtimeInstance.updateRun) {
+          result = await runtimeInstance.updateRun(runId, {
+            risk: options.risk,
+            status: 'running',
+            tests_run: [...getRunTests(currentRun), ...(options.test || [])],
+          });
+        } else {
+          throw new Error('GitPlus runtime cannot record checkpoints.');
+        }
+      } else {
+        result = await checkpoint!({
+          summary: options.summary,
+          risk: options.risk,
+          tests: options.test || [],
+          cwd,
+        });
+      }
+
+      output('✅ Recorded GitPlus checkpoint');
+      if (AgentRuntime) {
+        output(`Summary: ${options.summary}`);
+      }
+      printResult(result);
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+// Agent claim command
+program
+  .command('claim <paths...>')
+  .description('Claim ownership of paths for the current GitPlus run')
+  .action(async (paths: string[]) => {
+    try {
+      const gitClient = new GitClient();
+      await ensureGitRepository(gitClient);
+
+      const runtime = loadAgentRuntime();
+      const claimPaths = runtime?.claimPaths || runtime?.claim;
+      const AgentRuntime = runtime?.AgentRuntime;
+
+      if (!claimPaths && !AgentRuntime) {
+        printAgentRuntimeMissing('runtime');
+        return;
+      }
+
+      const cwd = gitClient.getWorkingDirectory();
+      let result: unknown;
+      if (AgentRuntime) {
+        const runtimeInstance = new AgentRuntime(cwd);
+        const currentRun = await getLatestAgentRun(runtime, cwd);
+        const runId = getRunId(currentRun);
+        if (!runId || !runtimeInstance.addPathClaims) {
+          throw new Error('No current GitPlus run found. Start one with gitplus start first.');
+        }
+        result = await runtimeInstance.addPathClaims(runId, paths);
+      } else {
+        result = await claimPaths!({
+          paths,
+          cwd,
+        });
+      }
+
+      output(`✅ Claimed ${paths.length} path${paths.length === 1 ? '' : 's'}`);
+      printResult(result);
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
 // Status command
 program
   .command('status')
@@ -365,6 +789,25 @@ program
       output(`  - Unstaged: ${status.unstaged.length} files`);
       output(`  - Untracked: ${status.untracked.length} files`);
       output(`  - Clean: ${status.isDirty ? 'No' : 'Yes'}`);
+
+      const runtime = loadAgentRuntime();
+      if (runtime) {
+        try {
+          const currentRun = await getLatestAgentRun(runtime, gitClient.getWorkingDirectory());
+          const runLines = formatCurrentRun(currentRun);
+          if (runLines.length > 0) {
+            runLines.forEach(line => output(line));
+          } else if (options.verbose) {
+            output('\nGitPlus Run: none');
+          }
+        } catch (runError) {
+          if (options.verbose) {
+            output(`\nGitPlus Run: unavailable (${runError instanceof Error ? runError.message : 'unknown error'})`);
+          }
+        }
+      } else if (options.verbose) {
+        output('\nGitPlus Run: runtime module not available');
+      }
 
       if (options.verbose) {
         if (status.staged.length > 0) {
