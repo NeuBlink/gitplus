@@ -339,7 +339,7 @@ jobs:
           REQUIRE_CLAUDE_REVIEW: ${{ vars.REQUIRE_CLAUDE_REVIEW }}
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
 

@@ -24,7 +24,7 @@ jobs:
     
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 1
@@ -80,7 +80,7 @@ jobs:
           BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
 
       - name: Checkout Release Please branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Use specific SHA to avoid ref manipulation
           ref: ${{ github.event.pull_request.head.sha }}
@@ -92,7 +92,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20.x'
           cache: 'npm'
