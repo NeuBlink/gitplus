@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/NeuBlink/gitplus/compare/gitplus-v1.2.0...gitplus-v1.2.1) (2026-05-18)
+
+
+### Bug Fixes
+
+* resolve dependency vulnerabilities ([#47](https://github.com/NeuBlink/gitplus/issues/47)) ([002f2ae](https://github.com/NeuBlink/gitplus/commit/002f2ae30d90ebfb1db45bc974c2812ced2d1a5e))
+
 ## [1.2.0](https://github.com/NeuBlink/gitplus/compare/gitplus-v1.1.0...gitplus-v1.2.0) (2025-07-26)
 
 
