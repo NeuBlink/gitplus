@@ -85,7 +85,7 @@ jobs:
       run: npm audit --audit-level moderate
       
     - name: Check for known vulnerabilities
-      run: npx audit-ci --config ./audit-ci.json || true
+      run: npx audit-ci --config ./audit-ci.json
 
   compatibility:
     runs-on: ${{ matrix.os }}
