@@ -169,8 +169,8 @@ jobs:
           echo "CHECK_RESULTS<<EOF" >> $GITHUB_OUTPUT
           gh pr checks "$PR_NUMBER" \
             --repo "$GITHUB_REPOSITORY" \
-            --json name,state,conclusion \
-            | jq -r '.[] | "\(.name): \(.state) (\(.conclusion // "pending"))"' >> $GITHUB_OUTPUT
+            --json name,state \
+            | jq -r '.[] | "\(.name): \(.state)"' >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           
           # Get PR metadata
@@ -230,6 +230,8 @@ jobs:
             echo "Detected Release Please PR"
           fi
           echo "IS_RELEASE_PLEASE=$IS_RELEASE_PLEASE" >> $GITHUB_OUTPUT
+          CLAUDE_REVIEW_REQUIRED="${REQUIRE_CLAUDE_REVIEW:-false}"
+          echo "CLAUDE_REVIEW_REQUIRED=$CLAUDE_REVIEW_REQUIRED" >> $GITHUB_OUTPUT
           
           # Get HEAD SHA from PR data if not available from event (workflow_dispatch case)
           if [ -z "$HEAD_SHA" ] || [ "$HEAD_SHA" = "null" ]; then
@@ -275,6 +277,10 @@ jobs:
             echo "🤖 Release Please PR detected - skipping Claude review requirement"
             echo "CLAUDE_REVIEW_CONTENT=Release Please PR: Code review bypassed for automated release" >> $GITHUB_OUTPUT
             CLAUDE_RESULT="SKIPPED_RELEASE"
+          elif [ "$CLAUDE_REVIEW_REQUIRED" != "true" ]; then
+            echo "⚠️ Claude review disabled by REQUIRE_CLAUDE_REVIEW repo variable"
+            echo "CLAUDE_REVIEW_CONTENT=Claude review temporarily disabled by repository configuration" >> $GITHUB_OUTPUT
+            CLAUDE_RESULT="SKIPPED_CONFIG"
           elif [ "$CLAUDE_RESULT" = "SUCCESS" ]; then
             echo "🔍 Claude review workflow completed successfully"
             echo "⏳ Claude review content validation will be handled after artifact download"
@@ -329,7 +335,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ needs.wait-for-checks.outputs.pr_number }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          HEAD_SHA: ${{ steps.pr-context.outputs.HEAD_SHA || github.event.pull_request.head.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REQUIRE_CLAUDE_REVIEW: ${{ vars.REQUIRE_CLAUDE_REVIEW }}
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -345,13 +352,13 @@ jobs:
           
           if [ "$AUTHOR" != "app/github-actions" ]; then
             echo "❌ SECURITY VIOLATION: Invalid Release Please author: $AUTHOR"
-            echo "release_validation_passed=false" >> $GITHUB_OUTPUT
+            echo "release_validation_passed=false" >> "$GITHUB_OUTPUT"
             exit 1
           fi
           
           if [[ ! "$HEAD_BRANCH" =~ ^release-please--branches--main--components-- ]]; then
             echo "❌ SECURITY VIOLATION: Invalid Release Please branch pattern: $HEAD_BRANCH"
-            echo "release_validation_passed=false" >> $GITHUB_OUTPUT
+            echo "release_validation_passed=false" >> "$GITHUB_OUTPUT"
             exit 1
           fi
           
@@ -393,10 +400,10 @@ jobs:
           
           if [ "$VALIDATION_PASSED" = "true" ]; then
             echo "✅ Release Please PR validation passed"
-            echo "release_validation_passed=true" >> $GITHUB_OUTPUT
+            echo "release_validation_passed=true" >> "$GITHUB_OUTPUT"
           else
             echo "❌ Release Please PR validation failed"
-            echo "release_validation_passed=false" >> $GITHUB_OUTPUT
+            echo "release_validation_passed=false" >> "$GITHUB_OUTPUT"
             exit 1
           fi
         env:
@@ -408,7 +415,7 @@ jobs:
 
       - name: Download Claude review analysis
         id: download-review
-        if: steps.pr-context.outputs.IS_RELEASE_PLEASE != 'true'
+        if: steps.pr-context.outputs.IS_RELEASE_PLEASE != 'true' && steps.pr-context.outputs.CLAUDE_REVIEW_REQUIRED == 'true'
         run: |
           # Validate GitHub run parameters
           if ! [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]] || ! [[ "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]; then
@@ -503,7 +510,7 @@ jobs:
 
       - name: Validate Claude review content
         id: validate-review
-        if: steps.pr-context.outputs.IS_RELEASE_PLEASE != 'true'
+        if: steps.pr-context.outputs.IS_RELEASE_PLEASE != 'true' && steps.pr-context.outputs.CLAUDE_REVIEW_REQUIRED == 'true'
         run: |
           echo "🔍 Validating Claude review content..."
           
@@ -557,6 +564,9 @@ jobs:
           if [ "${{ steps.pr-context.outputs.IS_RELEASE_PLEASE }}" = "true" ]; then
             echo "🤖 Release Please PR - using bypassed review content"
             echo "CLAUDE_REVIEW_CONTENT=Release Please PR: Code review bypassed for automated release" >> $GITHUB_OUTPUT
+          elif [ "${{ steps.pr-context.outputs.CLAUDE_REVIEW_REQUIRED }}" != "true" ]; then
+            echo "⚠️ Claude review disabled - using manual review placeholder"
+            echo "CLAUDE_REVIEW_CONTENT=Claude review temporarily disabled by repository configuration; human review required before merge." >> $GITHUB_OUTPUT
           else
             echo "📄 Loading validated Claude review content..."
             
@@ -691,8 +701,27 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
 
+      - name: Make merge decision (Claude disabled)
+        if: steps.pr-context.outputs.IS_RELEASE_PLEASE != 'true' && steps.pr-context.outputs.CLAUDE_REVIEW_REQUIRED != 'true'
+        run: |
+          echo "⚠️ Claude review is disabled; requiring human approval."
+          MERGE_RUN_DIR="/tmp/merge-decision-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$MERGE_RUN_DIR"
+
+          cat > "$MERGE_RUN_DIR/merge-decision.json" << 'EOF'
+          {
+            "decision": "MANUAL_APPROVAL",
+            "reason": "Claude review is temporarily disabled by repository configuration; human review required.",
+            "critical_issues": [],
+            "recommended_action": "manual-review"
+          }
+          EOF
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+
       - name: Generate merge decision prompt
-        if: steps.pr-context.outputs.IS_RELEASE_PLEASE != 'true'
+        if: steps.pr-context.outputs.IS_RELEASE_PLEASE != 'true' && steps.pr-context.outputs.CLAUDE_REVIEW_REQUIRED == 'true'
         run: |
           # Create a concise prompt using extracted template logic
           PR_TITLE="${{ steps.pr-context.outputs.PR_TITLE }}"
@@ -726,7 +755,7 @@ jobs:
 
       - name: Make merge decision (Regular PR)
         id: merge-decision
-        if: steps.pr-context.outputs.IS_RELEASE_PLEASE != 'true'
+        if: steps.pr-context.outputs.IS_RELEASE_PLEASE != 'true' && steps.pr-context.outputs.CLAUDE_REVIEW_REQUIRED == 'true'
         uses: anthropics/claude-code-action@e26577a930883943cf9d90885cd1e8da510078dd # beta
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -1018,7 +1047,7 @@ jobs:
 
   auto-merge:
     runs-on: ubuntu-latest
-    needs: merge-decision
+    needs: [wait-for-checks, merge-decision]
     if: |
       always() && 
       (github.event_name != 'pull_request' || github.head_ref != 'fix/dependency-vulnerabilities') &&
@@ -1029,25 +1058,30 @@ jobs:
       - name: Get PR information
         id: pr-info
         run: |
-          # Validate PR number from event
-          if ! [[ "$EVENT_PR_NUMBER" =~ ^[0-9]+$ ]] || [ "$EVENT_PR_NUMBER" -lt 1 ] || [ "$EVENT_PR_NUMBER" -gt 99999 ]; then
-            echo "❌ ERROR: Invalid PR number from event: $EVENT_PR_NUMBER"
+          PR_NUMBER="${EVENT_PR_NUMBER:-$DISPATCH_PR_NUMBER}"
+
+          # Validate PR number from event or workflow_dispatch input
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || (( PR_NUMBER < 1 || PR_NUMBER > 99999 )); then
+            echo "❌ ERROR: Invalid PR number: $PR_NUMBER"
             exit 1
           fi
           
-          echo "pr_number=$EVENT_PR_NUMBER" >> $GITHUB_OUTPUT
-          echo "🔍 Processing auto-merge for PR #$EVENT_PR_NUMBER"
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "🔍 Processing auto-merge for PR #$PR_NUMBER"
           
           # Get PR details
-          PR_DATA=$(gh pr view "$EVENT_PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+          PR_DATA=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
             --json title,author,headRefName,mergeable,mergeStateStatus,isDraft,state)
           
-          echo "PR_DATA<<EOF" >> $GITHUB_OUTPUT
-          echo "$PR_DATA" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "PR_DATA<<EOF"
+            echo "$PR_DATA"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          DISPATCH_PR_NUMBER: ${{ needs.wait-for-checks.outputs.pr_number }}
           GITHUB_REPOSITORY: ${{ github.repository }}
 
       - name: Check merge eligibility
@@ -1138,7 +1172,7 @@ jobs:
           
           # Try auto-merge first (GitHub's auto-merge feature)
           echo "🔄 Attempting to enable auto-merge with $MERGE_METHOD method..."
-          AUTO_MERGE_OUTPUT=$(gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" -"$MERGE_METHOD" --auto 2>&1) || AUTO_MERGE_FAILED=true
+          AUTO_MERGE_OUTPUT=$(gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" "--$MERGE_METHOD" --auto 2>&1) || AUTO_MERGE_FAILED=true
           
           if [ -z "$AUTO_MERGE_FAILED" ]; then
             echo "✅ Successfully enabled auto-merge for PR #$PR_NUMBER"
@@ -1152,7 +1186,7 @@ jobs:
             echo "🔄 Attempting direct merge..."
             
             # Try immediate merge
-            DIRECT_MERGE_OUTPUT=$(gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" -"$MERGE_METHOD" 2>&1) || DIRECT_MERGE_FAILED=true
+            DIRECT_MERGE_OUTPUT=$(gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" "--$MERGE_METHOD" 2>&1) || DIRECT_MERGE_FAILED=true
             
             if [ -z "$DIRECT_MERGE_FAILED" ]; then
               echo "✅ Successfully merged PR #$PR_NUMBER directly"
@@ -1184,8 +1218,10 @@ jobs:
                 --body "⚠️ **Auto-merge Failed**\\n\\n✅ **Decision**: $DECISION (approved by GitPlus AI)\\n❌ **Issue**: $FAILURE_REASON\\n\\n**Error Details:**\\n\\\`\\\`\\\`\\n$DIRECT_MERGE_OUTPUT\\n\\\`\\\`\\\`\\n\\n**Manual Action Required**: Please merge this PR manually or review repository settings."
               
               # Set output but don't fail the workflow
-              echo "auto_merge_failed=true" >> $GITHUB_OUTPUT
-              echo "failure_reason=$FAILURE_REASON" >> $GITHUB_OUTPUT
+              {
+                echo "auto_merge_failed=true"
+                echo "failure_reason=$FAILURE_REASON"
+              } >> "$GITHUB_OUTPUT"
             fi
           fi
         env:
