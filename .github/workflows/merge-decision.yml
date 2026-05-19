@@ -20,7 +20,7 @@ on:
 permissions:
   contents: write  # Required for merging PRs
   pull-requests: write
-  issues: read
+  issues: write
   actions: read
   checks: read
   statuses: write  # Required for creating commit status checks
@@ -37,6 +37,11 @@ jobs:
       - name: Get PR number
         id: get-pr
         run: |
+          if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] && [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+            echo "❌ ERROR: Unsupported event for merge decision: $GITHUB_EVENT_NAME"
+            exit 1
+          fi
+
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             # Validate workflow_dispatch input
             if ! [[ "$INPUT_PR_NUMBER" =~ ^[0-9]+$ ]] || [ "$INPUT_PR_NUMBER" -lt 1 ] || [ "$INPUT_PR_NUMBER" -gt 99999 ]; then
@@ -759,6 +764,7 @@ jobs:
         uses: anthropics/claude-code-action@e26577a930883943cf9d90885cd1e8da510078dd # beta
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           use_sticky_comment: true
           allowed_tools: "Bash,Write,Read"
           direct_prompt: |
@@ -916,16 +922,8 @@ jobs:
           
           # Auto-merge if this is a Release Please PR and recommended action is auto-merge
           if [ "$IS_RELEASE_PLEASE" = "true" ] && [ "$RECOMMENDED_ACTION" = "auto-merge" ]; then
-            echo "🚀 Auto-merging Release Please PR..."
-            
-            if gh pr merge "$PR_NUMBER" \
-              --repo "$GITHUB_REPOSITORY" \
-              --auto \
-              --squash; then
-              echo "✅ Auto-merge enabled successfully"
-            else
-              echo "::warning::Failed to enable auto-merge. PR may need manual merge."
-            fi
+            echo "🚀 Release Please PR approved for auto-merge"
+            echo "ℹ️ Deferring direct merge to the auto-merge job after the merge-decision status is created"
           else
             echo "📋 PR approved but requires manual merge (action: $RECOMMENDED_ACTION)"
           fi
@@ -937,7 +935,7 @@ jobs:
             -f description="$DESCRIPTION" \
             -f context="merge-decision" 2>/dev/null || echo "::warning::Status creation failed"
         env:
-          GH_TOKEN: ${{ steps.pr-context.outputs.IS_RELEASE_PLEASE == 'true' && secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           COMMIT_SHA: ${{ steps.pr-context.outputs.HEAD_SHA || github.event.pull_request.head.sha || github.sha }}
           PR_NUMBER: ${{ steps.pr-context.outputs.PR_NUMBER }}
@@ -1138,9 +1136,58 @@ jobs:
           PR_NUMBER: ${{ steps.pr-info.outputs.pr_number }}
           PR_DATA: ${{ steps.pr-info.outputs.PR_DATA }}
 
+      - name: Execute release auto-merge
+        if: |
+          steps.check-merge.outputs.eligible == 'true' &&
+          steps.check-merge.outputs.is_release == 'true' &&
+          needs.merge-decision.outputs.DECISION == 'APPROVE' &&
+          needs.merge-decision.outputs.RECOMMENDED_ACTION == 'auto-merge'
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Release merge credential is not configured"
+            exit 1
+          fi
+
+          echo "🚀 Direct-merging Release Please PR #$PR_NUMBER"
+          echo "📋 Decision: $DECISION"
+          echo "🔧 Method: $MERGE_METHOD"
+
+          PR_STATUS=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json mergeable,mergeStateStatus | jq -r '.mergeStateStatus')
+          echo "📋 PR merge state: $PR_STATUS"
+
+          if [ "$PR_STATUS" != "CLEAN" ] && [ "$PR_STATUS" != "UNSTABLE" ]; then
+            echo "❌ Release PR is not in a mergeable state: $PR_STATUS"
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --body "⚠️ **Release Auto-merge Blocked**\\n\\n❌ **Issue**: PR merge state is '$PR_STATUS'\\n✅ **Decision**: $DECISION was approved\\n\\n**Resolution**: Ensure all required checks pass and conflicts are resolved, then try manual merge."
+            exit 0
+          fi
+
+          DIRECT_MERGE_OUTPUT=$(gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" "--$MERGE_METHOD" --delete-branch 2>&1) || DIRECT_MERGE_FAILED=true
+
+          if [ -z "$DIRECT_MERGE_FAILED" ]; then
+            echo "✅ Successfully merged Release Please PR #$PR_NUMBER directly"
+            echo "📋 Direct merge output: $DIRECT_MERGE_OUTPUT"
+
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --body "🤖 **Release PR Merged** by GitPlus\\n\\n✅ **Decision**: $DECISION\\n🚀 **Method**: $MERGE_METHOD\\n🔑 **Merge path**: release-authorized direct merge\\n\\nThis PR was merged directly so downstream release workflows can run."
+            exit 0
+          fi
+
+          echo "❌ Direct release merge failed: $DIRECT_MERGE_OUTPUT"
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --body "⚠️ **Release Auto-merge Failed**\\n\\n✅ **Decision**: $DECISION (approved by GitPlus AI)\\n❌ **Issue**: Direct release-authorized merge failed\\n\\n**Error Details:**\\n\\\`\\\`\\\`\\n$DIRECT_MERGE_OUTPUT\\n\\\`\\\`\\\`\\n\\n**Manual Action Required**: Please merge this PR manually or review repository settings."
+          exit 0
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          PR_NUMBER: ${{ steps.pr-info.outputs.pr_number }}
+          MERGE_METHOD: ${{ steps.check-merge.outputs.merge_method }}
+          DECISION: ${{ needs.merge-decision.outputs.DECISION }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
       - name: Execute auto-merge
         if: |
-          steps.check-merge.outputs.eligible == 'true' && 
+          steps.check-merge.outputs.eligible == 'true' &&
+          steps.check-merge.outputs.is_release != 'true' &&
           (needs.merge-decision.outputs.DECISION == 'APPROVE' || 
            (needs.merge-decision.outputs.DECISION == 'MANUAL_APPROVAL' && 
             needs.merge-decision.outputs.RECOMMENDED_ACTION == 'auto-merge'))
@@ -1225,10 +1272,9 @@ jobs:
             fi
           fi
         env:
-          GH_TOKEN: ${{ steps.check-merge.outputs.is_release == 'true' && secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ steps.pr-info.outputs.pr_number }}
           MERGE_METHOD: ${{ steps.check-merge.outputs.merge_method }}
-          IS_RELEASE: ${{ steps.check-merge.outputs.is_release }}
           DECISION: ${{ needs.merge-decision.outputs.DECISION }}
           GITHUB_REPOSITORY: ${{ github.repository }}
 

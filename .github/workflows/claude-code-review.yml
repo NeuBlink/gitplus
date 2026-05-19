@@ -12,8 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      pull-requests: write
+      issues: write
       id-token: write
     
     steps:
@@ -27,6 +27,7 @@ jobs:
         uses: anthropics/claude-code-action@e26577a930883943cf9d90885cd1e8da510078dd # beta
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
           # Optional: Specify model (defaults to Claude Sonnet 4, uncomment for Claude Opus 4)
           # model: "claude-opus-4-20250514"
@@ -113,7 +114,10 @@ jobs:
             
             # Get all comments and filter for Claude comments with sufficient length
             ALL_COMMENTS=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json comments)
-            REVIEW_DATA=$(echo "$ALL_COMMENTS" | jq --arg min_length "$MIN_REVIEW_LENGTH" '.comments[] | select(.author.login == "claude" and (.body | length > ($min_length | tonumber))) | {body: .body, length: (.body | length)}')
+            REVIEW_DATA=$(echo "$ALL_COMMENTS" | jq -c \
+              --arg min_length "$MIN_REVIEW_LENGTH" \
+              --arg run_id "$GITHUB_RUN_ID" \
+              '.comments | map(select(.author.login == "claude" and (.body | contains($run_id)) and (.body | length > ($min_length | tonumber)))) | last // empty | {body: .body, length: (.body | length)}')
             
             if [ -n "$REVIEW_DATA" ] && [ "$REVIEW_DATA" != "null" ]; then
               POTENTIAL_REVIEW=$(echo "$REVIEW_DATA" | jq -r '.body')
