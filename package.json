@@ -1,6 +1,6 @@
 {
   "name": "@neublink/gitplus",
-  "version": "1.3.2",
+  "version": "1.4.0",
   "description": "Git workflow automation for coding agents and MCP clients",
   "main": "dist/index.js",
   "bin": {
