@@ -937,7 +937,7 @@ jobs:
             -f description="$DESCRIPTION" \
             -f context="merge-decision" 2>/dev/null || echo "::warning::Status creation failed"
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.pr-context.outputs.IS_RELEASE_PLEASE == 'true' && secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           COMMIT_SHA: ${{ steps.pr-context.outputs.HEAD_SHA || github.event.pull_request.head.sha || github.sha }}
           PR_NUMBER: ${{ steps.pr-context.outputs.PR_NUMBER }}
@@ -1225,7 +1225,7 @@ jobs:
             fi
           fi
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.check-merge.outputs.is_release == 'true' && secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ steps.pr-info.outputs.pr_number }}
           MERGE_METHOD: ${{ steps.check-merge.outputs.merge_method }}
           IS_RELEASE: ${{ steps.check-merge.outputs.is_release }}
