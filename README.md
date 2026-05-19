@@ -304,17 +304,9 @@ GitPlus will handle all git operations intelligently, ensuring proper commit mes
 
 ## Publishing & Release
 
-Use the GitHub Actions workflow to publish:
+Releases are managed by Release Please. Conventional commits merged to `main` update the release PR; merging that PR creates the GitHub release and tag, then the tag-triggered release workflow publishes to npm.
 
-1. **Go to Actions tab** in GitHub repository
-2. **Select "Manual Publish"** workflow  
-3. **Choose version bump**: patch, minor, or major
-4. **Click "Run workflow"** to automatically:
-   - Run full test suite
-   - Build the package
-   - Bump version and create git tag
-   - Publish to NPM registry
-   - Create GitHub release with changelog
+For required secrets, verification, and manual recovery steps, see [docs/release-runbook.md](docs/release-runbook.md).
 
 ## Contributing
 

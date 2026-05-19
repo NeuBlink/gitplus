@@ -344,7 +344,7 @@ jobs:
           REQUIRE_CLAUDE_REVIEW: ${{ vars.REQUIRE_CLAUDE_REVIEW }}
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
@@ -1184,7 +1184,7 @@ jobs:
           DECISION: ${{ needs.merge-decision.outputs.DECISION }}
           GITHUB_REPOSITORY: ${{ github.repository }}
 
-      - name: Execute auto-merge
+      - name: Execute regular direct-merge
         if: |
           steps.check-merge.outputs.eligible == 'true' &&
           steps.check-merge.outputs.is_release != 'true' &&
@@ -1192,9 +1192,12 @@ jobs:
            (needs.merge-decision.outputs.DECISION == 'MANUAL_APPROVAL' && 
             needs.merge-decision.outputs.RECOMMENDED_ACTION == 'auto-merge'))
         run: |
-          # All values now come from environment variables
-          
-          echo "🚀 Auto-merging PR #$PR_NUMBER"
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Regular merge credential is not configured"
+            exit 1
+          fi
+
+          echo "🚀 Direct-merging regular PR #$PR_NUMBER"
           echo "📋 Decision: $DECISION"
           echo "🔧 Method: $MERGE_METHOD"
           
@@ -1217,62 +1220,40 @@ jobs:
             exit 0
           fi
           
-          # Try auto-merge first (GitHub's auto-merge feature)
-          echo "🔄 Attempting to enable auto-merge with $MERGE_METHOD method..."
-          AUTO_MERGE_OUTPUT=$(gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" "--$MERGE_METHOD" --auto 2>&1) || AUTO_MERGE_FAILED=true
-          
-          if [ -z "$AUTO_MERGE_FAILED" ]; then
-            echo "✅ Successfully enabled auto-merge for PR #$PR_NUMBER"
-            echo "📋 Auto-merge output: $AUTO_MERGE_OUTPUT"
+          echo "🔄 Attempting direct merge with $MERGE_METHOD method..."
+          DIRECT_MERGE_OUTPUT=$(gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" "--$MERGE_METHOD" 2>&1) || DIRECT_MERGE_FAILED=true
+
+          if [ -z "$DIRECT_MERGE_FAILED" ]; then
+            echo "✅ Successfully merged PR #$PR_NUMBER directly"
+            echo "📋 Direct merge output: $DIRECT_MERGE_OUTPUT"
             
             gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-              --body "🤖 **Auto-merge Enabled** by GitPlus\\n\\n✅ **Decision**: $DECISION\\n🚀 **Method**: $MERGE_METHOD\\n\\nThis PR will be automatically merged once all required status checks pass."
+              --body "🤖 **PR Merged** by GitPlus\\n\\n✅ **Decision**: $DECISION\\n🚀 **Method**: $MERGE_METHOD\\n🔑 **Merge path**: regular direct merge\\n\\nThis PR was merged directly with a repository credential so downstream workflows can run."
               
           else
-            echo "⚠️ Auto-merge failed: $AUTO_MERGE_OUTPUT"
-            echo "🔄 Attempting direct merge..."
+            echo "❌ Direct merge failed: $DIRECT_MERGE_OUTPUT"
+            echo "📋 Analyzing failure reasons..."
             
-            # Try immediate merge
-            DIRECT_MERGE_OUTPUT=$(gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" "--$MERGE_METHOD" 2>&1) || DIRECT_MERGE_FAILED=true
-            
-            if [ -z "$DIRECT_MERGE_FAILED" ]; then
-              echo "✅ Successfully merged PR #$PR_NUMBER directly"
-              echo "📋 Direct merge output: $DIRECT_MERGE_OUTPUT"
-              
-              gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-                --body "🤖 **PR Merged** by GitPlus\\n\\n✅ **Decision**: $DECISION\\n🚀 **Method**: $MERGE_METHOD\\n\\nThis PR has been automatically merged."
-                
+            # Provide detailed failure analysis
+            if echo "$DIRECT_MERGE_OUTPUT" | grep -q "Resource not accessible"; then
+              echo "❌ Permission issue detected"
+              FAILURE_REASON="Insufficient workflow permissions for merging"
+            elif echo "$DIRECT_MERGE_OUTPUT" | grep -q "branch protection"; then
+              echo "❌ Branch protection rule violation"
+              FAILURE_REASON="Branch protection rules prevent automatic merging"
+            elif echo "$DIRECT_MERGE_OUTPUT" | grep -q "required status checks"; then
+              echo "❌ Required status checks not satisfied"
+              FAILURE_REASON="Required status checks have not passed"
             else
-              echo "❌ Direct merge also failed: $DIRECT_MERGE_OUTPUT"
-              echo "📋 Analyzing failure reasons..."
-              
-              # Provide detailed failure analysis
-              if echo "$DIRECT_MERGE_OUTPUT" | grep -q "Resource not accessible"; then
-                echo "❌ Permission issue detected"
-                FAILURE_REASON="Insufficient workflow permissions for merging"
-              elif echo "$DIRECT_MERGE_OUTPUT" | grep -q "branch protection"; then
-                echo "❌ Branch protection rule violation"
-                FAILURE_REASON="Branch protection rules prevent automatic merging"
-              elif echo "$DIRECT_MERGE_OUTPUT" | grep -q "required status checks"; then
-                echo "❌ Required status checks not satisfied"
-                FAILURE_REASON="Required status checks have not passed"
-              else
-                echo "❌ Unknown merge failure"
-                FAILURE_REASON="Unknown error during merge operation"
-              fi
-              
-              gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-                --body "⚠️ **Auto-merge Failed**\\n\\n✅ **Decision**: $DECISION (approved by GitPlus AI)\\n❌ **Issue**: $FAILURE_REASON\\n\\n**Error Details:**\\n\\\`\\\`\\\`\\n$DIRECT_MERGE_OUTPUT\\n\\\`\\\`\\\`\\n\\n**Manual Action Required**: Please merge this PR manually or review repository settings."
-              
-              # Set output but don't fail the workflow
-              {
-                echo "auto_merge_failed=true"
-                echo "failure_reason=$FAILURE_REASON"
-              } >> "$GITHUB_OUTPUT"
+              echo "❌ Unknown merge failure"
+              FAILURE_REASON="Unknown error during merge operation"
             fi
+
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --body "⚠️ **Direct Merge Failed**\\n\\n✅ **Decision**: $DECISION (approved by GitPlus AI)\\n❌ **Issue**: $FAILURE_REASON\\n\\n**Error Details:**\\n\\\`\\\`\\\`\\n$DIRECT_MERGE_OUTPUT\\n\\\`\\\`\\\`\\n\\n**Manual Action Required**: Please merge this PR manually or review repository settings."
           fi
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           PR_NUMBER: ${{ steps.pr-info.outputs.pr_number }}
           MERGE_METHOD: ${{ steps.check-merge.outputs.merge_method }}
           DECISION: ${{ needs.merge-decision.outputs.DECISION }}
