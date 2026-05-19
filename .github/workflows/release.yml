@@ -6,6 +6,10 @@ on:
       - 'v*'
       - 'gitplus-v*'
 
+env:
+  # Opt JavaScript actions into GitHub's Node 24 runtime before it becomes the default.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   test:
     runs-on: ubuntu-latest
