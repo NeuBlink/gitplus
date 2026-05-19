@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/NeuBlink/gitplus/compare/gitplus-v1.3.0...gitplus-v1.3.1) (2026-05-19)
+
+
+### Bug Fixes
+
+* **ci:** use release token for release PR auto-merge ([f3d611d](https://github.com/NeuBlink/gitplus/commit/f3d611d7c6a5dc4d7adee0798e1d8e2f8e4a95fc))
+
 ## [1.3.0](https://github.com/NeuBlink/gitplus/compare/gitplus-v1.2.1...gitplus-v1.3.0) (2026-05-18)
 
 
