@@ -181,13 +181,14 @@ jobs:
           # Get PR metadata
           PR_DATA=$(gh pr view "$PR_NUMBER" \
             --repo "$GITHUB_REPOSITORY" \
-            --json title,body,mergeable,mergeStateStatus,isDraft,author,baseRefName,headRefName,commits)
+            --json title,body,mergeable,mergeStateStatus,isDraft,author,baseRefName,headRefName,headRepository,commits)
           
           # Extract user-controlled PR metadata
           RAW_PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
           RAW_PR_AUTHOR=$(echo "$PR_DATA" | jq -r '.author.login')
           RAW_HEAD_BRANCH=$(echo "$PR_DATA" | jq -r '.headRefName')
           RAW_BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')
+          RAW_HEAD_REPOSITORY=$(echo "$PR_DATA" | jq -r '.headRepository.nameWithOwner // ""')
           
           # Validate PR metadata using common validation script
           # Note: We can't source the script directly in GitHub Actions without checkout,
@@ -215,6 +216,11 @@ jobs:
             echo "❌ ERROR: Base branch name is invalid (empty, too long, or contains dangerous characters)"
             exit 1
           fi
+
+          if [ -z "$RAW_HEAD_REPOSITORY" ] || ! [[ "$RAW_HEAD_REPOSITORY" =~ ^[a-zA-Z0-9._-]{1,100}/[a-zA-Z0-9._-]{1,100}$ ]]; then
+            echo "❌ ERROR: Head repository format is invalid: $RAW_HEAD_REPOSITORY"
+            exit 1
+          fi
           
           # Store sanitized values
           echo "PR_NUMBER=$PR_NUMBER" >> $GITHUB_OUTPUT
@@ -225,12 +231,16 @@ jobs:
           echo "PR_AUTHOR=$RAW_PR_AUTHOR" >> $GITHUB_OUTPUT
           echo "BASE_BRANCH=$RAW_BASE_BRANCH" >> $GITHUB_OUTPUT
           echo "HEAD_BRANCH=$RAW_HEAD_BRANCH" >> $GITHUB_OUTPUT
+          echo "HEAD_REPOSITORY=$RAW_HEAD_REPOSITORY" >> $GITHUB_OUTPUT
           
-          # Check if this is a Release Please PR (use sanitized variables)
-          AUTHOR="$RAW_PR_AUTHOR"
+          # Check if this is a Release Please PR using repository-controlled invariants.
+          # The PR author may be the release PAT owner when RELEASE_PLEASE_TOKEN is used.
           HEAD_BRANCH="$RAW_HEAD_BRANCH"
           IS_RELEASE_PLEASE="false"
-          if [[ "$AUTHOR" == "app/github-actions" ]] && [[ "$HEAD_BRANCH" =~ ^release-please--branches--main--components-- ]]; then
+          if [[ "$HEAD_BRANCH" =~ ^release-please--branches--main--components-- ]] &&
+             [ "$RAW_BASE_BRANCH" = "main" ] &&
+             [ "$RAW_HEAD_REPOSITORY" = "$GITHUB_REPOSITORY" ] &&
+             [[ "$RAW_PR_TITLE" =~ ^chore\(main\):[[:space:]]release[[:space:]] ]]; then
             IS_RELEASE_PLEASE="true"
             echo "Detected Release Please PR"
           fi
@@ -353,16 +363,28 @@ jobs:
         if: steps.pr-context.outputs.IS_RELEASE_PLEASE == 'true'
         run: |
           echo "🔒 Validating Release Please PR security..."
-          # Security validation: Strict author verification using environment variables
+          # Security validation: verify repository-controlled release PR invariants.
           
-          if [ "$AUTHOR" != "app/github-actions" ]; then
-            echo "❌ SECURITY VIOLATION: Invalid Release Please author: $AUTHOR"
+          if [ "$HEAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]; then
+            echo "❌ SECURITY VIOLATION: Release Please PR must come from $GITHUB_REPOSITORY, got $HEAD_REPOSITORY"
+            echo "release_validation_passed=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          if [ "$BASE_BRANCH" != "main" ]; then
+            echo "❌ SECURITY VIOLATION: Release Please PR must target main, got $BASE_BRANCH"
             echo "release_validation_passed=false" >> "$GITHUB_OUTPUT"
             exit 1
           fi
           
           if [[ ! "$HEAD_BRANCH" =~ ^release-please--branches--main--components-- ]]; then
             echo "❌ SECURITY VIOLATION: Invalid Release Please branch pattern: $HEAD_BRANCH"
+            echo "release_validation_passed=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          if [[ ! "$PR_TITLE" =~ ^chore\(main\):[[:space:]]release[[:space:]] ]]; then
+            echo "❌ SECURITY VIOLATION: Invalid Release Please title: $PR_TITLE"
             echo "release_validation_passed=false" >> "$GITHUB_OUTPUT"
             exit 1
           fi
@@ -414,8 +436,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ steps.pr-context.outputs.PR_NUMBER }}
-          AUTHOR: ${{ steps.pr-context.outputs.PR_AUTHOR }}
+          PR_TITLE: ${{ steps.pr-context.outputs.PR_TITLE }}
+          BASE_BRANCH: ${{ steps.pr-context.outputs.BASE_BRANCH }}
           HEAD_BRANCH: ${{ steps.pr-context.outputs.HEAD_BRANCH }}
+          HEAD_REPOSITORY: ${{ steps.pr-context.outputs.HEAD_REPOSITORY }}
           GITHUB_REPOSITORY: ${{ github.repository }}
 
       - name: Download Claude review analysis
@@ -689,8 +713,10 @@ jobs:
           **Action**: $RECOMMENDED_ACTION  
           
           **Security Validation**: ✅ Passed
-          - Author verified: app/github-actions
+          - Source repository verified: ${{ steps.pr-context.outputs.HEAD_REPOSITORY }}
+          - Base branch verified: main
           - Branch pattern verified: release-please--*
+          - Release title verified
           - File changes validated: Only safe release files
           
           **CI Status**: 
@@ -1069,7 +1095,7 @@ jobs:
           
           # Get PR details
           PR_DATA=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --json title,author,headRefName,mergeable,mergeStateStatus,isDraft,state)
+            --json title,author,baseRefName,headRefName,headRepository,mergeable,mergeStateStatus,isDraft,state)
           
           {
             echo "PR_DATA<<EOF"
@@ -1091,8 +1117,11 @@ jobs:
           MERGE_STATE=$(echo "$PR_DATA" | jq -r '.mergeStateStatus')
           IS_DRAFT=$(echo "$PR_DATA" | jq -r '.isDraft')
           PR_STATE=$(echo "$PR_DATA" | jq -r '.state')
+          PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
           PR_AUTHOR=$(echo "$PR_DATA" | jq -r '.author.login')
+          BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')
           HEAD_BRANCH=$(echo "$PR_DATA" | jq -r '.headRefName')
+          HEAD_REPOSITORY=$(echo "$PR_DATA" | jq -r '.headRepository.nameWithOwner // ""')
           
           echo "📋 PR Status Check:"
           # Safely print user-controlled variables to prevent command injection
@@ -1101,7 +1130,9 @@ jobs:
           printf "  - Merge State: %s\n" "$MERGE_STATE"
           printf "  - Is Draft: %s\n" "$IS_DRAFT"
           printf "  - Author: %s\n" "$PR_AUTHOR"
+          printf "  - Base branch: %s\n" "$BASE_BRANCH"
           printf "  - Branch: %s\n" "$HEAD_BRANCH"
+          printf "  - Head repository: %s\n" "$HEAD_REPOSITORY"
           
           # Check basic merge requirements
           if [ "$PR_STATE" != "OPEN" ]; then
@@ -1119,7 +1150,10 @@ jobs:
           fi
           
           # Determine merge method
-          if [[ "$PR_AUTHOR" == "app/github-actions" ]] && [[ "$HEAD_BRANCH" =~ ^release-please--branches--main--components-- ]]; then
+          if [[ "$HEAD_BRANCH" =~ ^release-please--branches--main--components-- ]] &&
+             [ "$BASE_BRANCH" = "main" ] &&
+             [ "$HEAD_REPOSITORY" = "$GITHUB_REPOSITORY" ] &&
+             [[ "$PR_TITLE" =~ ^chore\(main\):[[:space:]]release[[:space:]] ]]; then
             echo "🔄 Release Please PR detected"
             echo "merge_method=squash" >> $GITHUB_OUTPUT
             echo "is_release=true" >> $GITHUB_OUTPUT
