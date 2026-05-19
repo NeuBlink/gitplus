@@ -18,7 +18,7 @@ jobs:
     
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
@@ -117,7 +117,7 @@ jobs:
             REVIEW_DATA=$(echo "$ALL_COMMENTS" | jq -c \
               --arg min_length "$MIN_REVIEW_LENGTH" \
               --arg run_id "$GITHUB_RUN_ID" \
-              '.comments | map(select(.author.login == "claude" and (.body | contains($run_id)) and (.body | length > ($min_length | tonumber)))) | last // empty | {body: .body, length: (.body | length)}')
+              '.comments | map(select((.author.login == "claude" or .author.login == "github-actions") and (.body | contains($run_id)) and (.body | length > ($min_length | tonumber)))) | last // empty | {body: .body, length: (.body | length)}')
             
             if [ -n "$REVIEW_DATA" ] && [ "$REVIEW_DATA" != "null" ]; then
               POTENTIAL_REVIEW=$(echo "$REVIEW_DATA" | jq -r '.body')
