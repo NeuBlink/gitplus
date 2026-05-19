@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/NeuBlink/gitplus/compare/gitplus-v1.3.2...gitplus-v1.4.0) (2026-05-19)
+
+
+### Features
+
+* **agent:** add agent adoption init command ([#59](https://github.com/NeuBlink/gitplus/issues/59)) ([2f5d774](https://github.com/NeuBlink/gitplus/commit/2f5d774dfa845f2f1adc4a9ccedf5282007d3e87))
+
 ## [1.3.2](https://github.com/NeuBlink/gitplus/compare/gitplus-v1.3.1...gitplus-v1.3.2) (2026-05-19)
 
 
