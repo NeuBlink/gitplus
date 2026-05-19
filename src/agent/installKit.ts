@@ -44,24 +44,18 @@ const AGENT_ORDER: AgentName[] = ['codex', 'claude', 'gemini'];
 
 export async function installAgentKit(options: InstallAgentKitOptions): Promise<InstallFileResult[]> {
   const agents = resolveAgents(options.agent);
-  const results: InstallFileResult[] = [];
+  const selectedSurfaces = getInstallSurfaces().filter(surface => agents.includes(surface.agent));
 
-  for (const surface of getInstallSurfaces()) {
-    if (!agents.includes(surface.agent)) {
-      continue;
-    }
-
+  return Promise.all(selectedSurfaces.map(async (surface): Promise<InstallFileResult> => {
     const absolutePath = join(options.repoPath, surface.relativePath);
     const status = await writeManagedBlock(absolutePath, surface.content, surface.markers, surface.preamble);
 
-    results.push({
+    return {
       agent: surface.agent,
       path: surface.relativePath,
       status,
-    });
-  }
-
-  return results;
+    };
+  }));
 }
 
 export async function writeManagedBlock(
@@ -184,15 +178,32 @@ function escapeRegExp(value: string): string {
 function sharedInstructions(agentLabel: string): string {
   const agentName = agentLabel.toLowerCase();
 
-  return `## GitPlus Git Operations
+  return `## GitPlus Agent Git Contract
 
-When working in this repository as ${agentLabel}, use GitPlus for repository operations:
+When working in this repository as ${agentLabel}, use GitPlus as the default interface for repository operations. The goal is to give coding agents the same safety rails Git gives humans: isolated work, visible ownership, reviewable checkpoints, and repeatable shipping.
+
+### Setup
+
+- If this repository does not already contain GitPlus instructions, run \`npx @neublink/gitplus init-agent --agent ${agentName}\` before starting agent work.
+
+### Work Lifecycle
 
 - Use \`npx @neublink/gitplus start --agent ${agentName} --task "<task>"\` before making changes so GitPlus can create an isolated worktree and run ledger.
 - Use \`npx @neublink/gitplus status --verbose\` instead of raw \`git status\` for change review, branch context, and current run context.
 - Use \`npx @neublink/gitplus claim <paths...>\` before editing files that may overlap with another agent's work.
 - Use \`npx @neublink/gitplus checkpoint --summary "<what changed>" --test "<validation command>"\` to save meaningful work-in-progress states.
 - Use \`npx @neublink/gitplus ship\` to create commits, push branches, and open pull requests.
+
+### Parallel Agent Rules
+
+- Claim files or directories before editing shared surfaces.
+- Keep each agent on its own GitPlus worktree and branch.
+- Do not edit another active agent's claimed paths unless the task explicitly requires coordination.
+- Checkpoint before switching tasks, handing off work, or attempting conflict-prone changes.
+- Include the exact tests, checks, or manual verification run in each checkpoint.
+
+### Recovery Rules
+
 - Avoid raw \`git commit\`, \`git push\`, and manual pull request creation except when recovering from a broken GitPlus operation.
 - If recovery requires raw git commands, explain why in your final response and return to GitPlus commands afterward.`;
 }
@@ -246,6 +257,12 @@ Run:
 3. npx @neublink/gitplus claim <paths...> before overlapping edits
 4. npx @neublink/gitplus checkpoint --summary "<what changed>" --test "<validation command>" when useful
 5. npx @neublink/gitplus ship
+
+Parallel Agent Rules:
+- Start one GitPlus run per agent.
+- Keep each agent on its own GitPlus worktree and branch.
+- Claim shared files or directories before editing them.
+- Checkpoint before handoff or conflict-prone changes.
 
 Avoid raw git commit, git push, and manual pull request creation except when recovering from a broken GitPlus operation. If recovery is required, explain why and return to GitPlus commands afterward.
 """`;

@@ -6,6 +6,8 @@ This document describes the CLI interface for GitPlus. **Note**: The CLI is seco
 
 GitPlus provides a comprehensive CLI interface with 14+ commands for advanced git operations. The CLI is designed for direct command-line usage and offers more granular control than the simplified MCP interface.
 
+The MCP interface remains intentionally small. Agent lifecycle commands such as `init-agent`, `start`, `claim`, and `checkpoint` are CLI-only coordination helpers; they do not expand the MCP tool surface.
+
 ## Installation
 
 The CLI is automatically available after installing GitPlus:
@@ -23,7 +25,7 @@ After linking, both `gitplus` and `gp` commands are available globally.
 
 Before using the CLI, ensure you have:
 
-- **Node.js 16+**: Required runtime environment
+- **Node.js 18+**: Required runtime environment
 - **Claude CLI**: Install and authenticate with `claude auth login`
   ```bash
   # Verify Claude CLI is available and authenticated
@@ -52,6 +54,10 @@ export GITPLUS_CLAUDE_COMMAND="claude"           # Claude CLI command path (defa
 
 | Command | Alias | Description |
 |---------|-------|-------------|
+| `gitplus init-agent` | | Install GitPlus instructions for Codex, Claude, Gemini, or all agents |
+| `gitplus start` | | Start an isolated agent run and worktree |
+| `gitplus claim` | | Claim paths for the current agent run |
+| `gitplus checkpoint` | | Record an agent checkpoint with validation context |
 | `gitplus commit` | `gp commit`* | AI-powered conventional commits |
 | `gitplus ship` | `gp ship`* | Complete workflow: commit → push → PR |
 | `gitplus analyze` | `gp analyze`* | AI analysis of repository changes |
@@ -67,6 +73,57 @@ export GITPLUS_CLAUDE_COMMAND="claude"           # Claude CLI command path (defa
 *Note: `gp` alias may conflict with existing shell aliases for `git push`
 
 ## Command Reference
+
+### `gitplus init-agent` - Agent Adoption Setup
+
+Install managed GitPlus instructions for coding agents. This is the fastest path to make Codex, Claude, Gemini, or all three use GitPlus for git operations.
+
+```bash
+# Install all supported agent surfaces
+gitplus init-agent
+gitplus init-agent --agent all
+
+# Install one agent surface
+gitplus init-agent --agent codex
+gitplus init-agent --agent claude
+gitplus init-agent --agent gemini
+
+# Positional form also works
+gitplus init-agent codex
+```
+
+**Generated surfaces:**
+- `AGENTS.md`
+- `CLAUDE.md`
+- `GEMINI.md`
+- `.agents/skills/gitplus/SKILL.md`
+- `.claude/skills/gitplus/SKILL.md`
+- `.gemini/commands/git/ship.toml`
+
+The installer is idempotent. It replaces only the GitPlus-managed block and preserves surrounding project-specific instructions.
+
+### Agent Run Commands
+
+Use these commands when an agent is doing repository work directly from the CLI.
+
+```bash
+# Start an isolated worktree-backed run
+gitplus start --agent codex --task "implement invoice validation"
+
+# Show branch, working tree, and current run context
+gitplus status --verbose
+
+# Claim files before overlapping edits
+gitplus claim src/invoices tests/invoices
+
+# Record progress and validation context
+gitplus checkpoint --summary "added invoice validation tests" --test "npm test -- invoices"
+
+# Commit, push, and open the PR
+gitplus ship
+```
+
+For parallel agents, start one run per agent, keep each agent on its own GitPlus branch/worktree, claim shared paths before editing, and checkpoint before handoff or conflict-prone changes.
 
 ### `gitplus commit` - AI-Powered Commits
 
