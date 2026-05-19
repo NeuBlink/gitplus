@@ -1,16 +1,18 @@
-# GitPlus - AI-Powered Git Automation for Claude Code
+# GitPlus - Git Workflows for Coding Agents
 
 [![CI](https://github.com/neublink/gitplus/workflows/CI/badge.svg)](https://github.com/neublink/gitplus/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D16.0.0-brightgreen)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
 
-GitPlus is a Model Context Protocol (MCP) server that brings AI-powered git automation directly to Claude Code. It provides a simplified, intelligent interface with just 3 essential tools that handle complete git workflows automatically.
+GitPlus gives coding agents a safer git workflow: isolated worktrees, path claims, checkpoints, status context, conventional commits, pull request creation, and release-friendly shipping. It works as a CLI for Codex, Claude, Gemini, and other coding agents, and it still includes a Model Context Protocol (MCP) server for Claude Code.
 
 ## Features
 
 🚀 **Complete Git Workflows**: One-command ship from changes to PR  
 💻 **Smart Commits**: AI-generated conventional commit messages with strict spec compliance  
 🔍 **Change Analysis**: Intelligent analysis of repository changes with breaking change detection  
+🤖 **Agent-Native**: Installs `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and skill/command surfaces for coding agents
+🧭 **Parallel Agent Coordination**: Worktree-backed runs, path claims, and checkpoints for multi-agent work
 🤖 **AI-Powered**: Uses Claude AI for commit messages, branch names, and conflict resolution  
 📝 **PR Automation**: Auto-generated pull request titles and descriptions  
 📊 **Repository Status**: Enhanced repository status with platform detection  
@@ -18,6 +20,41 @@ GitPlus is a Model Context Protocol (MCP) server that brings AI-powered git auto
 🌐 **Multi-Platform**: Supports GitHub, GitLab, and local repositories
 
 ## Quick Start
+
+### Install Agent Instructions
+
+Use this first when you want coding agents to rely on GitPlus for repository work:
+
+```bash
+npx @neublink/gitplus init-agent --agent all
+```
+
+This writes managed GitPlus sections into agent-facing files:
+
+- `AGENTS.md` for Codex and agent-runner conventions
+- `CLAUDE.md` and `.claude/skills/gitplus/SKILL.md` for Claude
+- `GEMINI.md` and `.gemini/commands/git/ship.toml` for Gemini
+- `.agents/skills/gitplus/SKILL.md` for Codex-style skill discovery
+
+For one agent only:
+
+```bash
+npx @neublink/gitplus init-agent --agent codex
+npx @neublink/gitplus init-agent --agent claude
+npx @neublink/gitplus init-agent --agent gemini
+```
+
+### Agent Workflow
+
+```bash
+npx @neublink/gitplus start --agent codex --task "add billing tests"
+npx @neublink/gitplus status --verbose
+npx @neublink/gitplus claim src/billing tests/billing
+npx @neublink/gitplus checkpoint --summary "added billing edge-case tests" --test "npm test -- billing"
+npx @neublink/gitplus ship
+```
+
+For parallel agents, each agent should start its own GitPlus run, claim the files it owns, checkpoint before handoff, and use `gitplus ship` instead of raw `git commit` and `git push`.
 
 ### Install as MCP Server for Claude Code
 
@@ -105,10 +142,10 @@ Get comprehensive information about GitPlus MCP server capabilities and usage
 
 ## Architecture
 
-GitPlus follows a **simplified MCP-first architecture** designed around intelligent automation:
+GitPlus follows a **simplified MCP-first architecture** for Claude Code while exposing CLI-only lifecycle commands that help coding agents coordinate local repository work without expanding the MCP tool surface.
 
 ### Core Design Philosophy
-- **3 Essential Tools**: Reduced from 14+ CLI commands to 3 MCP tools that handle everything
+- **3 Essential MCP Tools**: Keep the MCP surface focused while the CLI handles optional local agent lifecycle tasks
 - **AI-Powered Intelligence**: Uses Claude AI for all decision-making (commit messages, branch names, conflict resolution)
 - **Complete Workflows**: Each tool provides complete functionality rather than partial operations
 - **Zero Configuration**: Works out-of-the-box with sensible defaults
@@ -117,7 +154,7 @@ GitPlus follows a **simplified MCP-first architecture** designed around intellig
 - **TypeScript**: Type-safe development with strict compilation
 - **MCP SDK**: Official Model Context Protocol SDK for Claude Code integration
 - **Zod**: Runtime type validation for inputs and outputs
-- **Node.js**: Cross-platform compatibility (Node 16+)
+- **Node.js**: Cross-platform compatibility (Node 18+)
 - **Conventional Commits**: Strict adherence to commit message standards
 
 ### Key Components
@@ -161,7 +198,7 @@ refactor(utils): extract validation logic   # Code restructuring
 
 ## Prerequisites
 
-- **Node.js 16+**: Required runtime environment
+- **Node.js 18+**: Required runtime environment
 - **Git**: For repository management
 - **Claude CLI**: Install and authenticate with `claude auth login`
   ```bash
@@ -352,5 +389,5 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
-Made with ❤️ for the Claude Code community
+Made for coding agents that need safer git workflows
 <!-- Trigger merge decision re-analysis -->

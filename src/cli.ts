@@ -2,6 +2,7 @@
 
 import { Command } from 'commander';
 import prompts from 'prompts';
+import { randomUUID } from 'crypto';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -100,6 +101,15 @@ function getPackageVersion(): string {
 }
 
 const program = new Command();
+const OPTIONAL_MODULE_CANDIDATES = new Set([
+  './agent/runtime',
+  './runtime/agent',
+  './runtime',
+  './agent/install-kit',
+  './agent/installKit',
+  './install-kit/agent',
+  './install-kit',
+]);
 
 // Helper to format output
 function output(message: string) {
@@ -114,6 +124,10 @@ function handleError(error: any) {
 
 function loadOptionalModule<T>(moduleCandidates: string[]): T | undefined {
   for (const modulePath of moduleCandidates) {
+    if (!OPTIONAL_MODULE_CANDIDATES.has(modulePath) || modulePath.includes('..')) {
+      throw new Error(`Unsupported optional module candidate: ${modulePath}`);
+    }
+
     try {
       const loaded = require(modulePath);
       return (loaded.default || loaded) as T;
@@ -184,15 +198,56 @@ function printResult(result: unknown) {
   }
 }
 
+function isInstallFileResults(result: unknown): result is Array<{ agent: string; path: string; status: string }> {
+  return Array.isArray(result) && result.every((entry) => (
+    entry &&
+    typeof entry === 'object' &&
+    typeof (entry as Record<string, unknown>)['agent'] === 'string' &&
+    typeof (entry as Record<string, unknown>)['path'] === 'string' &&
+    typeof (entry as Record<string, unknown>)['status'] === 'string'
+  ));
+}
+
+function printInstallResults(result: unknown) {
+  if (!isInstallFileResults(result)) {
+    printResult(result);
+    return;
+  }
+
+  output('\nInstalled agent surfaces:');
+  for (const entry of result) {
+    output(`  - ${entry.status}: ${entry.path} (${entry.agent})`);
+  }
+}
+
 function createRunId(agent: string): string {
-  const safeAgent = agent.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'agent';
-  return `${safeAgent}-${Date.now().toString(36)}`;
+  const safeAgent = createSlug(agent, 'agent', 48, /[^a-z0-9._-]+/g);
+  return `${safeAgent}-${randomUUID().slice(0, 8)}`;
 }
 
 function createBranchName(agent: string, task: string): string {
-  const safeAgent = agent.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'agent';
-  const safeTask = task.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'task';
-  return `gitplus/${safeAgent}/${safeTask}-${Date.now().toString(36)}`;
+  const safeAgent = createSlug(agent, 'agent', 48, /[^a-z0-9._-]+/g);
+  const safeTask = createSlug(task, 'task', 48, /[^a-z0-9]+/g);
+  return `gitplus/${safeAgent}/${safeTask}-${randomUUID().slice(0, 8)}`;
+}
+
+function createSlug(value: string, fallback: string, maxLength: number, unsafePattern: RegExp): string {
+  const slug = value
+    .toLowerCase()
+    .replace(unsafePattern, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, maxLength)
+    .replace(/^-+|-+$/g, '');
+
+  if (!slug) {
+    return fallback;
+  }
+
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(slug)) {
+    throw new Error(`Could not create a safe slug from input: ${value}`);
+  }
+
+  return slug;
 }
 
 function getRunId(run: unknown): string | undefined {
@@ -299,6 +354,28 @@ async function ensureGitRepository(gitClient: GitClient): Promise<boolean> {
     }
   }
   return true;
+}
+
+async function initializeAgentSupport(agent: AgentInitTarget) {
+  const gitClient = new GitClient();
+  await ensureGitRepository(gitClient);
+
+  const installKit = loadAgentInstallKit();
+  const initAgentRuntime = installKit?.initAgentRuntime || installKit?.init;
+  const installAgentKit = installKit?.installAgentKit;
+
+  if (!initAgentRuntime && !installAgentKit) {
+    printAgentRuntimeMissing('install kit');
+    return;
+  }
+
+  const cwd = gitClient.getWorkingDirectory();
+  const result = installAgentKit
+    ? await installAgentKit({ agent, repoPath: cwd })
+    : await initAgentRuntime!({ agent, cwd });
+
+  output(`✅ Initialized GitPlus agent support: ${agent}`);
+  printInstallResults(result);
 }
 
 program
@@ -579,25 +656,26 @@ program
   .requiredOption('--agent <agent>', 'Agent runtime to initialize (codex, claude, gemini, all)', parseInitAgent)
   .action(async (options) => {
     try {
-      const gitClient = new GitClient();
-      await ensureGitRepository(gitClient);
+      await initializeAgentSupport(options.agent);
+    } catch (error) {
+      handleError(error);
+    }
+  });
 
-      const installKit = loadAgentInstallKit();
-      const initAgentRuntime = installKit?.initAgentRuntime || installKit?.init;
-      const installAgentKit = installKit?.installAgentKit;
+program
+  .command('init-agent [agent]')
+  .description('Install GitPlus instructions for coding agents')
+  .option('--agent <agent>', 'Agent instructions to install (codex, claude, gemini, all)', parseInitAgent)
+  .action(async (agentArg: string | undefined, options) => {
+    try {
+      const positionalAgent = agentArg ? parseInitAgent(agentArg) : undefined;
+      const optionAgent = options.agent as AgentInitTarget | undefined;
 
-      if (!initAgentRuntime && !installAgentKit) {
-        printAgentRuntimeMissing('install kit');
-        return;
+      if (positionalAgent && optionAgent && positionalAgent !== optionAgent) {
+        throw new Error('Specify the agent once, either positionally or with --agent');
       }
 
-      const cwd = gitClient.getWorkingDirectory();
-      const result = installAgentKit
-        ? await installAgentKit({ agent: options.agent, repoPath: cwd })
-        : await initAgentRuntime!({ agent: options.agent, cwd });
-
-      output(`✅ Initialized GitPlus agent runtime: ${options.agent}`);
-      printResult(result);
+      await initializeAgentSupport(optionAgent || positionalAgent || 'all');
     } catch (error) {
       handleError(error);
     }

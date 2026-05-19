@@ -38,7 +38,11 @@ describe('installAgentKit', () => {
     expect(countOccurrences(secondAgentsContent, '<!-- gitplus-agent-kit:start -->')).toBe(1);
     expect(secondSkillContent.startsWith('---\nname: gitplus')).toBe(true);
     expect(countOccurrences(secondSkillContent, '<!-- gitplus-agent-kit:start -->')).toBe(1);
+    expect(secondAgentsContent).toContain('GitPlus Agent Git Contract');
+    expect(secondAgentsContent).toContain('npx @neublink/gitplus init-agent --agent codex');
     expect(secondAgentsContent).toContain('npx @neublink/gitplus ship');
+    expect(secondAgentsContent).toContain('Parallel Agent Rules');
+    expect(secondAgentsContent).toContain('Keep each agent on its own GitPlus worktree and branch');
     expect(secondAgentsContent).toContain('Avoid raw `git commit`, `git push`, and manual pull request creation');
   });
 
@@ -89,6 +93,7 @@ describe('installAgentKit', () => {
     expect(geminiCommand).toContain('# gitplus-agent-kit:start');
     expect(geminiCommand).toContain('description = "Ship repository changes with GitPlus"');
     expect(geminiCommand).toContain('npx @neublink/gitplus start');
+    expect(geminiCommand).toContain('Parallel Agent Rules');
     expect(countOccurrences(geminiCommand, '# gitplus-agent-kit:start')).toBe(1);
   });
 });

@@ -286,7 +286,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 
 3. **No Manual Git Commands**: Always use GitPlus MCP tools instead of manual git commands.
 
-4. **3-Tool Limit**: Resist adding more MCP tools. Enhance existing tools instead.
+4. **3-Tool Limit**: Resist adding more MCP tools. Enhance existing tools instead. This limit applies to the MCP surface; CLI-only agent lifecycle commands are acceptable when they keep the MCP API small and help coding agents coordinate work safely.
 
 ## CI/CD Pipeline
 
