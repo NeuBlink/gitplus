@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.2](https://github.com/NeuBlink/gitplus/compare/gitplus-v1.3.1...gitplus-v1.3.2) (2026-05-19)
+
+
+### Bug Fixes
+
+* **ci:** direct merge approved prs with automation token ([#56](https://github.com/NeuBlink/gitplus/issues/56)) ([0993adc](https://github.com/NeuBlink/gitplus/commit/0993adc58889b5c2607f9d694a5501382e826888))
+* **ci:** direct merge release PRs with release token ([#55](https://github.com/NeuBlink/gitplus/issues/55)) ([c6b7252](https://github.com/NeuBlink/gitplus/commit/c6b7252f36f2f2af4988fcbe4d5e90f18348e0b7))
+
 ## [1.3.1](https://github.com/NeuBlink/gitplus/compare/gitplus-v1.3.0...gitplus-v1.3.1) (2026-05-19)
 
 
