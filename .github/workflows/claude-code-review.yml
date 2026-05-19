@@ -5,6 +5,10 @@ on:
     types: [opened, synchronize, reopened]
     # Run on all PR types - no path restrictions to ensure workflow and infrastructure changes are reviewed
 
+env:
+  # Opt JavaScript actions into GitHub's Node 24 runtime before it becomes the default.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   claude-review:
     # Keep Claude optional while the repository token is rotated.
@@ -226,7 +230,7 @@ jobs:
 
       - name: Upload review analysis
         if: always()  # Upload even if review has issues
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: claude-review-analysis-${{ github.event.pull_request.number }}-${{ github.run_id }}
           path: /tmp/claude-review-${{ github.run_id }}-${{ github.run_attempt }}/claude-review-analysis.md
